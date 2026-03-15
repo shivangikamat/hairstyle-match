@@ -10,28 +10,15 @@ import type {
   Salon,
   SalonSearchResponse,
 } from "@/lib/types";
-import SelfieUploader from "@/components/SelfieUploader";
 import SalonList from "@/components/SalonList";
 import LiveStyleStudio from "@/components/LiveStyleStudio";
 import HairstyleOverlay from "@/components/HairstyleOverlay";
-import { createOverlayFromStyle } from "@/lib/styleStudio";
+import {
+  createOverlayFromStyle,
+  HERO_PRESET_SUGGESTIONS,
+} from "@/lib/styleStudio";
 
-const STARTER_SUGGESTIONS: HairstyleSuggestion[] = [
-  {
-    name: "Textured Bob",
-    reason: "A sharp but wearable starter look with clean lines and easy polish.",
-  },
-  {
-    name: "Curtain Layers",
-    reason:
-      "A face-framing option that keeps movement, softness, and length in play.",
-  },
-  {
-    name: "Modern Shag",
-    reason:
-      "A more directional cut with texture and crown lift for instant camera energy.",
-  },
-];
+const STARTER_SUGGESTIONS: HairstyleSuggestion[] = HERO_PRESET_SUGGESTIONS;
 
 export default function Page() {
   const [suggestions, setSuggestions] = useState<HairstyleSuggestion[]>([]);
@@ -156,7 +143,7 @@ export default function Page() {
       </nav>
 
       {/* Hero Section */}
-      <LampContainer className="pt-20">
+      <LampContainer className="pt-20 pb-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
@@ -182,8 +169,9 @@ export default function Page() {
           transition={{ delay: 0.5, duration: 0.8 }}
           className="mt-6 max-w-2xl text-center text-base md:text-lg text-slate-400 leading-relaxed px-4"
         >
-          Talk to the stylist immediately, switch on the webcam if you want,
-          then drop in a portrait only when you want more personalized analysis.
+          Start the live salon agent immediately, let MediaPipe track the look on
+          webcam or mannequin mode, and only add a portrait when you want the
+          realistic Gemini render to get more personal.
         </motion.p>
         
         <motion.div
@@ -197,7 +185,7 @@ export default function Page() {
             className="group relative inline-flex h-12 items-center justify-center gap-2 overflow-hidden rounded-full bg-cyan-500 px-8 text-sm font-medium text-slate-950 transition-all hover:bg-cyan-400 hover:shadow-[0_0_40px_rgba(34,211,238,0.4)] disabled:opacity-70 disabled:cursor-not-allowed"
           >
             <span className="flex items-center gap-2">
-              Analyze Face <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              Start Session <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
             </span>
           </button>
           <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-slate-700 px-8 text-sm font-medium text-slate-300 transition-all hover:border-slate-500 hover:bg-slate-800/50 hover:text-white">
@@ -241,13 +229,10 @@ export default function Page() {
                 selfieUrl={selfieUrl}
                 selectedStyle={resolvedSelectedStyle}
                 onSelectStyle={(styleName) => handleChooseStyle(styleName)}
+                onPortraitAnalyzed={handleResults}
               />
 
-              <div className="mb-10">
-                <SelfieUploader onResults={handleResults} />
-              </div>
-
-              <div className="grid gap-6 md:grid-cols-3">
+              <div className="grid gap-6 md:grid-cols-3 xl:grid-cols-6">
                 {activeSuggestions.map((style, i) => (
                   <motion.article
                     initial={{ opacity: 0, scale: 0.95 }}

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { generateStyleBoardWithGemini } from "@/lib/gemini";
+import { generateRenderLookWithGemini } from "@/lib/gemini";
 import type { FaceProfile, MakeoverLevel, PresetTuning } from "@/lib/types";
 import { inferPresetIdFromStyleName } from "@/lib/styleStudio";
 
@@ -30,17 +30,16 @@ export async function POST(request: Request) {
       presetLabel?: string | null;
       tuning?: Partial<PresetTuning> | null;
       makeoverLevel?: MakeoverLevel | null;
-      mashupName?: string | null;
       preferences?: string | null;
       preferencesSummary?: string | null;
       stylistReply?: string | null;
       faceProfile?: FaceProfile | null;
       selfieDataUrl?: string | null;
     };
-    const selectedStyle = body.selectedStyle?.trim() || body.mashupName?.trim() || null;
+    const selectedStyle = body.selectedStyle?.trim() || null;
     const presetId = inferPresetIdFromStyleName(selectedStyle, body.preferences || "");
 
-    const payload = await generateStyleBoardWithGemini({
+    const payload = await generateRenderLookWithGemini({
       selectedStyle,
       presetId,
       presetLabel: body.presetLabel || null,
@@ -55,13 +54,13 @@ export async function POST(request: Request) {
 
     return NextResponse.json(payload);
   } catch (error) {
-    console.error("Error in /api/style-board:", error);
+    console.error("Error in /api/render-look:", error);
     return NextResponse.json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to generate style board.",
+            : "Failed to render the on-face hairstyle.",
       },
       { status: 500 }
     );

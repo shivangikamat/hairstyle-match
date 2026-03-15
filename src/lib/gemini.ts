@@ -1,15 +1,27 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import type {
   FaceProfile,
-  HairOverlayConfig,
   HairstyleSuggestion,
+  HeroPresetId,
+  MakeoverLevel,
+  PresetTuning,
+  RenderLookResponse,
   StyleAgentResponse,
   StyleAgentTurn,
   StyleBoardResponse,
 } from "./types";
 import {
+  HERO_PRESET_IDS,
+  HERO_PRESET_SUGGESTIONS,
   buildLivePreferenceContext,
+  buildPresetCatalogPrompt,
+  buildRenderLookPrompt,
+  buildStyleBoardPrompt,
   createFallbackStyleAgentResponse,
+  createOverlayFromPreset,
+  getHeroPreset,
+  inferPresetIdFromStyleName,
+  normalizePresetTuning,
 } from "./styleStudio";
 
 type GeminiFaceResponse = {
@@ -22,25 +34,13 @@ type InlineImagePayload = {
   data: string;
 };
 
+type GeminiImageInput = {
+  imageBytes: Buffer;
+  mimeType: string;
+} | null;
+
 const TEXT_MODEL = "gemini-2.5-flash";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
-
-const DEFAULT_SUGGESTIONS: HairstyleSuggestion[] = [
-  {
-    name: "Textured Bob",
-    reason: "Adds movement and volume while softly framing most face shapes.",
-  },
-  {
-    name: "Curtain Layers",
-    reason:
-      "Long, face-framing layers that balance wide cheeks and soften sharp jawlines.",
-  },
-  {
-    name: "Modern Shag",
-    reason:
-      "Works well for wavy or straight hair, adding lift at the crown and definition around the eyes.",
-  },
-];
 
 const DEFAULT_FACE_PROFILE: FaceProfile = {
   faceShape: "oval",
@@ -48,37 +48,7 @@ const DEFAULT_FACE_PROFILE: FaceProfile = {
   skinTone: "unknown",
 };
 
-const VALID_SILHOUETTES: HairOverlayConfig["silhouette"][] = [
-  "bob",
-  "curtain",
-  "shag",
-];
-const VALID_COLORS: HairOverlayConfig["colorName"][] = [
-  "soft-black",
-  "espresso",
-  "chestnut",
-  "copper",
-  "golden-blonde",
-];
-const VALID_PARTS: HairOverlayConfig["part"][] = ["center", "side"];
-const VALID_TEXTURES: HairOverlayConfig["texture"][] = [
-  "sleek",
-  "airy",
-  "piecey",
-  "wavy",
-];
-const VALID_VOLUMES: HairOverlayConfig["volume"][] = ["low", "medium", "high"];
-const VALID_FRINGES: HairOverlayConfig["fringe"][] = [
-  "none",
-  "curtain",
-  "wispy",
-  "full",
-];
-const VALID_LENGTHS: HairOverlayConfig["length"][] = [
-  "short",
-  "medium",
-  "long",
-];
+const DEFAULT_SUGGESTIONS = HERO_PRESET_SUGGESTIONS.slice(0, 4);
 
 function getApiKey() {
   return process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || null;
@@ -105,13 +75,6 @@ function getRequiredClient() {
   }
 
   return client;
-}
-
-function isOneOf<T extends string>(
-  value: unknown,
-  items: readonly T[]
-): value is T {
-  return typeof value === "string" && items.includes(value as T);
 }
 
 function parseJsonResponse<T>(text: string): T | null {
@@ -168,6 +131,118 @@ function extractImageFromResponse(response: {
   return null;
 }
 
+function isPresetId(value: unknown): value is HeroPresetId {
+  return typeof value === "string" && HERO_PRESET_IDS.includes(value as HeroPresetId);
+}
+
+function isMakeoverLevel(value: unknown): value is MakeoverLevel {
+  return value === "subtle" || value === "signature" || value === "editorial";
+}
+
+function sanitizeSuggestion(candidate: unknown): HairstyleSuggestion | null {
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+
+  const parsed = candidate as Record<string, unknown>;
+  const presetId = isPresetId(parsed.presetId)
+    ? parsed.presetId
+    : inferPresetIdFromStyleName(
+        typeof parsed.name === "string" ? parsed.name : undefined
+      );
+  const preset = getHeroPreset(presetId);
+
+  return {
+    name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : preset.label,
+    reason:
+      typeof parsed.reason === "string" && parsed.reason.trim()
+        ? parsed.reason.trim()
+        : preset.description,
+    presetId,
+  };
+}
+
+function sanitizeAnalyzeResponse(candidate: unknown): GeminiFaceResponse {
+  if (!candidate || typeof candidate !== "object") {
+    return {
+      faceProfile: DEFAULT_FACE_PROFILE,
+      suggestions: DEFAULT_SUGGESTIONS,
+    };
+  }
+
+  const parsed = candidate as Record<string, unknown>;
+  const faceCandidate =
+    parsed.faceProfile && typeof parsed.faceProfile === "object"
+      ? (parsed.faceProfile as Record<string, unknown>)
+      : {};
+  const suggestions = Array.isArray(parsed.suggestions)
+    ? parsed.suggestions
+        .map((item) => sanitizeSuggestion(item))
+        .filter((item): item is HairstyleSuggestion => Boolean(item))
+        .slice(0, 4)
+    : [];
+
+  return {
+    faceProfile: {
+      faceShape:
+        typeof faceCandidate.faceShape === "string"
+          ? faceCandidate.faceShape
+          : DEFAULT_FACE_PROFILE.faceShape,
+      hairTexture:
+        typeof faceCandidate.hairTexture === "string"
+          ? faceCandidate.hairTexture
+          : DEFAULT_FACE_PROFILE.hairTexture,
+      skinTone:
+        typeof faceCandidate.skinTone === "string"
+          ? faceCandidate.skinTone
+          : DEFAULT_FACE_PROFILE.skinTone,
+    },
+    suggestions: suggestions.length > 0 ? suggestions : DEFAULT_SUGGESTIONS,
+  };
+}
+
+function sanitizeTuningCandidate(
+  candidate: unknown
+): Partial<PresetTuning> | undefined {
+  if (!candidate || typeof candidate !== "object") {
+    return undefined;
+  }
+
+  const parsed = candidate as Record<string, unknown>;
+
+  return {
+    part:
+      parsed.part === "center" || parsed.part === "side"
+        ? parsed.part
+        : undefined,
+    fringeStrength:
+      typeof parsed.fringeStrength === "number" ? parsed.fringeStrength : undefined,
+    softness: typeof parsed.softness === "number" ? parsed.softness : undefined,
+    lengthBias:
+      typeof parsed.lengthBias === "number" ? parsed.lengthBias : undefined,
+    crownVolume:
+      typeof parsed.crownVolume === "number" ? parsed.crownVolume : undefined,
+    sleekness:
+      typeof parsed.sleekness === "number" ? parsed.sleekness : undefined,
+    waveBoost:
+      typeof parsed.waveBoost === "number" ? parsed.waveBoost : undefined,
+    density: typeof parsed.density === "number" ? parsed.density : undefined,
+    colorDirection: isColorName(parsed.colorDirection)
+      ? parsed.colorDirection
+      : undefined,
+  };
+}
+
+function isColorName(value: unknown): value is PresetTuning["colorDirection"] {
+  return (
+    value === "soft-black" ||
+    value === "espresso" ||
+    value === "chestnut" ||
+    value === "copper" ||
+    value === "golden-blonde"
+  );
+}
+
 function sanitizeAgentResponse(
   candidate: unknown,
   preferences: string,
@@ -187,20 +262,27 @@ function sanitizeAgentResponse(
   }
 
   const parsed = candidate as Record<string, unknown>;
-  const suggestionNames = suggestions.map((suggestion) => suggestion.name);
-  const selectedStyle =
-    typeof parsed.selectedStyle === "string" &&
-    suggestionNames.includes(parsed.selectedStyle)
-      ? parsed.selectedStyle
-      : fallback.selectedStyle;
-
-  const overlayCandidate =
-    parsed.overlay && typeof parsed.overlay === "object"
-      ? (parsed.overlay as Record<string, unknown>)
-      : {};
+  const presetId = isPresetId(parsed.presetId)
+    ? parsed.presetId
+    : inferPresetIdFromStyleName(
+        typeof parsed.selectedStyle === "string" ? parsed.selectedStyle : currentStyle,
+        preferences
+      );
+  const preset = getHeroPreset(presetId);
+  const tuning = normalizePresetTuning(
+    presetId,
+    sanitizeTuningCandidate(parsed.tuning)
+  );
+  const makeoverLevel = isMakeoverLevel(parsed.makeoverLevel)
+    ? parsed.makeoverLevel
+    : fallback.makeoverLevel;
+  const overlay = createOverlayFromPreset(presetId, tuning, makeoverLevel);
 
   return {
-    selectedStyle,
+    selectedStyle:
+      typeof parsed.selectedStyle === "string" && parsed.selectedStyle.trim()
+        ? parsed.selectedStyle.trim()
+        : preset.label,
     mashupName:
       typeof parsed.mashupName === "string" && parsed.mashupName.trim()
         ? parsed.mashupName.trim()
@@ -214,30 +296,65 @@ function sanitizeAgentResponse(
       parsed.preferencesSummary.trim()
         ? parsed.preferencesSummary.trim()
         : fallback.preferencesSummary,
-    overlay: {
-      silhouette: isOneOf(overlayCandidate.silhouette, VALID_SILHOUETTES)
-        ? overlayCandidate.silhouette
-        : fallback.overlay.silhouette,
-      colorName: isOneOf(overlayCandidate.colorName, VALID_COLORS)
-        ? overlayCandidate.colorName
-        : fallback.overlay.colorName,
-      part: isOneOf(overlayCandidate.part, VALID_PARTS)
-        ? overlayCandidate.part
-        : fallback.overlay.part,
-      texture: isOneOf(overlayCandidate.texture, VALID_TEXTURES)
-        ? overlayCandidate.texture
-        : fallback.overlay.texture,
-      volume: isOneOf(overlayCandidate.volume, VALID_VOLUMES)
-        ? overlayCandidate.volume
-        : fallback.overlay.volume,
-      fringe: isOneOf(overlayCandidate.fringe, VALID_FRINGES)
-        ? overlayCandidate.fringe
-        : fallback.overlay.fringe,
-      length: isOneOf(overlayCandidate.length, VALID_LENGTHS)
-        ? overlayCandidate.length
-        : fallback.overlay.length,
-      fit: fallback.overlay.fit,
+    presetId,
+    presetLabel:
+      typeof parsed.presetLabel === "string" && parsed.presetLabel.trim()
+        ? parsed.presetLabel.trim()
+        : preset.label,
+    tuning,
+    makeoverLevel,
+    overlay,
+  };
+}
+
+async function generateImagePayload(params: {
+  prompt: string;
+  title: string;
+  presetId: HeroPresetId;
+  presetLabel: string;
+  makeoverLevel: MakeoverLevel;
+  selfie?: GeminiImageInput;
+}) {
+  const client = getRequiredClient();
+  const image = toInlineImagePayload(
+    params.selfie?.imageBytes,
+    params.selfie?.mimeType
+  );
+  const result = await client.models.generateContent({
+    model: IMAGE_MODEL,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: params.prompt },
+          ...(image ? [{ inlineData: image }] : []),
+        ],
+      },
+    ],
+    config: {
+      responseModalities: [Modality.IMAGE, Modality.TEXT],
+      temperature: 0.8,
     },
+  });
+  const generatedImage = extractImageFromResponse(result);
+
+  if (!generatedImage) {
+    throw new Error(
+      result.text?.trim() ||
+        "Gemini did not return an image for this hairstyle render."
+    );
+  }
+
+  return {
+    imageDataUrl: `data:${generatedImage.mimeType};base64,${generatedImage.data}`,
+    mimeType: generatedImage.mimeType,
+    title: params.title,
+    prompt: params.prompt,
+    model: IMAGE_MODEL,
+    modelText: result.text?.trim() || "",
+    presetId: params.presetId,
+    presetLabel: params.presetLabel,
+    makeoverLevel: params.makeoverLevel,
   };
 }
 
@@ -255,13 +372,16 @@ export async function analyzeSelfieWithGemini(
   }
 
   const prompt = `
-You are a world-class hairstylist and face-shape analyst.
+You are a celebrity stylist helping a user pick one of the available hero haircut presets for a live try-on app.
 
-Look closely at this selfie and:
-1) Infer the person's face shape, hair texture, and skin tone category.
-2) Recommend 3 specific hairstyles that would be very flattering.
+Available hero presets:
+${buildPresetCatalogPrompt()}
 
-Respond with strict JSON only using this shape:
+Look at the selfie and:
+1. infer the person's face shape, natural hair texture, and skin tone
+2. choose up to 4 flattering presets from the available list only
+
+Respond with strict JSON only:
 {
   "faceProfile": {
     "faceShape": "round | oval | square | heart | diamond | oblong",
@@ -270,8 +390,9 @@ Respond with strict JSON only using this shape:
   },
   "suggestions": [
     {
-      "name": "string",
-      "reason": "string"
+      "name": "preset label exactly as written above",
+      "reason": "one sentence",
+      "presetId": "exact preset id"
     }
   ]
 }
@@ -291,24 +412,11 @@ Respond with strict JSON only using this shape:
     ],
     config: {
       responseMimeType: "application/json",
-      temperature: 0.4,
+      temperature: 0.35,
     },
   });
 
-  const parsed = parseJsonResponse<GeminiFaceResponse>(result.text || "");
-
-  if (
-    !parsed ||
-    !Array.isArray(parsed.suggestions) ||
-    parsed.suggestions.length === 0
-  ) {
-    return {
-      faceProfile: DEFAULT_FACE_PROFILE,
-      suggestions: DEFAULT_SUGGESTIONS,
-    };
-  }
-
-  return parsed;
+  return sanitizeAnalyzeResponse(parseJsonResponse(result.text || ""));
 }
 
 export async function generateStyleMashupWithGemini(params: {
@@ -336,12 +444,18 @@ export async function generateStyleMashupWithGemini(params: {
   }
 
   const prompt = `
-You are a live celebrity hair stylist agent for a Gemini hackathon demo.
+You are a warm, decisive live salon agent. The app renders only a fixed preset catalog, so you must choose and tune one preset instead of inventing a custom haircut.
 
-The user is talking to a webcam preview and wants a hairstyle mashup recommendation.
-You must pick exactly one base style from this available list:
+Available hero presets:
+${buildPresetCatalogPrompt()}
+
+Available suggestions already shortlisted for this user:
 ${suggestions
-  .map((suggestion) => `- ${suggestion.name}: ${suggestion.reason}`)
+  .map((suggestion) => {
+    const presetId =
+      suggestion.presetId || inferPresetIdFromStyleName(suggestion.name);
+    return `- ${suggestion.name} (${presetId}): ${suggestion.reason}`;
+  })
   .join("\n")}
 
 Current selected style: ${currentStyle || "none"}
@@ -357,28 +471,39 @@ ${
     : "No prior conversation yet."
 }
 
-Newest preferences transcript:
+Newest preference transcript:
 ${preferences || "No specific preferences given."}
 
 Cumulative preference direction:
 ${livePreferenceContext || "No specific preferences given."}
 
-Respond with strict JSON only. Use this shape exactly:
+Respond with strict JSON only:
 {
-  "selectedStyle": "one of the available style names exactly",
-  "mashupName": "short memorable demo name",
-  "agentReply": "2-3 sentence stylist response in a warm, decisive tone",
-  "preferencesSummary": "one sentence summary of what the user asked for",
-  "overlay": {
-    "silhouette": "bob" | "curtain" | "shag",
-    "colorName": "soft-black" | "espresso" | "chestnut" | "copper" | "golden-blonde",
-    "part": "center" | "side",
-    "texture": "sleek" | "airy" | "piecey" | "wavy",
-    "volume": "low" | "medium" | "high",
-    "fringe": "none" | "curtain" | "wispy" | "full",
-    "length": "short" | "medium" | "long"
+  "selectedStyle": "preset label exactly",
+  "presetId": "exact preset id",
+  "presetLabel": "preset label exactly",
+  "mashupName": "short memorable name",
+  "agentReply": "2-3 sentences in a supportive stylist voice",
+  "preferencesSummary": "one sentence summary",
+  "makeoverLevel": "subtle | signature | editorial",
+  "tuning": {
+    "part": "center | side",
+    "fringeStrength": -1.0,
+    "softness": 0.0,
+    "lengthBias": 0.0,
+    "crownVolume": 0.0,
+    "sleekness": 0.0,
+    "waveBoost": 0.0,
+    "density": 0.0,
+    "colorDirection": "soft-black | espresso | chestnut | copper | golden-blonde"
   }
 }
+
+Rules:
+- choose one preset only
+- keep tuning values bounded and realistic
+- prefer believable, salon-ready advice over fantasy
+- if the user sounds subtle, keep makeoverLevel subtle or signature
 `.trim();
 
   try {
@@ -387,7 +512,7 @@ Respond with strict JSON only. Use this shape exactly:
       contents: prompt,
       config: {
         responseMimeType: "application/json",
-        temperature: 0.7,
+        temperature: 0.65,
       },
     });
 
@@ -404,88 +529,95 @@ Respond with strict JSON only. Use this shape exactly:
   }
 }
 
-export async function generateStyleBoardWithGemini(params: {
-  selectedStyle: string;
-  mashupName?: string | null;
+export async function generateRenderLookWithGemini(params: {
+  selectedStyle?: string | null;
+  presetId: HeroPresetId;
+  presetLabel?: string | null;
+  tuning?: Partial<PresetTuning> | null;
+  makeoverLevel?: MakeoverLevel | null;
   preferences?: string | null;
   preferencesSummary?: string | null;
   stylistReply?: string | null;
   faceProfile?: FaceProfile | null;
-  selfie?: {
-    imageBytes: Buffer;
-    mimeType: string;
-  } | null;
-}): Promise<StyleBoardResponse> {
-  const client = getRequiredClient();
-  const title = params.mashupName?.trim() || params.selectedStyle.trim();
-  const preferenceSummary =
+  selfie?: GeminiImageInput;
+}): Promise<RenderLookResponse> {
+  const preset = getHeroPreset(params.presetId);
+  const tuning = normalizePresetTuning(params.presetId, params.tuning);
+  const makeoverLevel = params.makeoverLevel || preset.makeoverBias;
+  const title = params.selectedStyle?.trim() || preset.label;
+  const brief =
     params.preferencesSummary?.trim() ||
     params.preferences?.trim() ||
-    "polished, flattering, salon-ready";
-  const stylistReply =
-    params.stylistReply?.trim() ||
-    `Build an elevated salon board for ${params.selectedStyle}.`;
-  const faceNotes = params.faceProfile
-    ? `${params.faceProfile.faceShape} face shape, ${params.faceProfile.hairTexture} texture, ${params.faceProfile.skinTone} tone.`
-    : "No face profile was supplied.";
-
-  const prompt = `
-Create a polished hairstyle style board image for a salon consultation.
-
-Primary hairstyle: ${params.selectedStyle}
-Board title direction: ${title}
-User preference summary: ${preferenceSummary}
-Stylist brief: ${stylistReply}
-Face and texture notes: ${faceNotes}
-
-Requirements:
-- photorealistic beauty editorial result
-- shoulders-up framing
-- hairstyle is the hero, with clear silhouette and texture
-- luxury salon campaign lighting
-- clean background
-- no text, no watermark, no split panels, no collage
-- keep the look wearable and stylist-ready
-- if a reference selfie is provided, preserve the person's identity while changing only the hairstyle
-`.trim();
-
-  const image = toInlineImagePayload(
-    params.selfie?.imageBytes,
-    params.selfie?.mimeType
-  );
-  const result = await client.models.generateContent({
-    model: IMAGE_MODEL,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: prompt },
-          ...(image ? [{ inlineData: image }] : []),
-        ],
-      },
-    ],
-    config: {
-      responseModalities: [Modality.IMAGE, Modality.TEXT],
-      temperature: 0.8,
-    },
+    preset.description;
+  const prompt = buildRenderLookPrompt({
+    selectedStyle: title,
+    presetId: params.presetId,
+    presetLabel: params.presetLabel || preset.label,
+    tuning,
+    makeoverLevel,
+    preferences: params.preferences || null,
+    preferencesSummary: params.preferencesSummary || null,
+    stylistReply: params.stylistReply || null,
+    faceProfile: params.faceProfile || null,
+  });
+  const imagePayload = await generateImagePayload({
+    prompt,
+    title,
+    presetId: params.presetId,
+    presetLabel: params.presetLabel || preset.label,
+    makeoverLevel,
+    selfie: params.selfie || null,
   });
 
-  const generatedImage = extractImageFromResponse(result);
+  return {
+    ...imagePayload,
+    brief,
+  };
+}
 
-  if (!generatedImage) {
-    throw new Error(
-      result.text?.trim() ||
-        "Gemini did not return an image for the style board request."
-    );
-  }
+export async function generateStyleBoardWithGemini(params: {
+  selectedStyle?: string | null;
+  presetId: HeroPresetId;
+  presetLabel?: string | null;
+  tuning?: Partial<PresetTuning> | null;
+  makeoverLevel?: MakeoverLevel | null;
+  preferences?: string | null;
+  preferencesSummary?: string | null;
+  stylistReply?: string | null;
+  faceProfile?: FaceProfile | null;
+  selfie?: GeminiImageInput;
+}): Promise<StyleBoardResponse> {
+  const preset = getHeroPreset(params.presetId);
+  const tuning = normalizePresetTuning(params.presetId, params.tuning);
+  const makeoverLevel = params.makeoverLevel || preset.makeoverBias;
+  const title = params.selectedStyle?.trim() || preset.label;
+  const brief =
+    params.preferencesSummary?.trim() ||
+    params.preferences?.trim() ||
+    preset.description;
+  const prompt = buildStyleBoardPrompt({
+    selectedStyle: title,
+    presetId: params.presetId,
+    presetLabel: params.presetLabel || preset.label,
+    tuning,
+    makeoverLevel,
+    preferences: params.preferences || null,
+    preferencesSummary: params.preferencesSummary || null,
+    stylistReply: params.stylistReply || null,
+    faceProfile: params.faceProfile || null,
+  });
+  const imagePayload = await generateImagePayload({
+    prompt,
+    title,
+    presetId: params.presetId,
+    presetLabel: params.presetLabel || preset.label,
+    makeoverLevel,
+    selfie: params.selfie || null,
+  });
 
   return {
-    imageDataUrl: `data:${generatedImage.mimeType};base64,${generatedImage.data}`,
-    mimeType: generatedImage.mimeType,
-    title,
-    brief: preferenceSummary,
-    prompt,
-    model: IMAGE_MODEL,
-    modelText: result.text?.trim() || "",
+    ...imagePayload,
+    brief,
+    boardCaption: `${title} tuned for ${makeoverLevel} impact.`,
   };
 }

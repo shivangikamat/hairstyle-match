@@ -1,51 +1,53 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Camera,
+  Download,
   Mic,
   MicOff,
   Sparkles,
+  Upload,
   Video,
-  Wand2,
   Volume2,
   VolumeX,
+  Wand2,
 } from "lucide-react";
 import type {
-  DetectedFaceFrame,
   FaceProfile,
   HairstyleSuggestion,
+  MakeoverLevel,
   OverlayAdjustment,
+  PresetTuning,
+  RenderLookResponse,
   StyleAgentResponse,
-  StyleBoardResponse,
   StyleAgentTurn,
+  StyleBoardResponse,
+  TrackedFacePose,
 } from "@/lib/types";
 import {
-  applyOverlayAdjustment,
-  calibrateOverlayToDetectedFace,
-  calibrateOverlayToFace,
-  createOverlayFromStyle,
   DEFAULT_OVERLAY_ADJUSTMENT,
+  applyOverlayAdjustment,
+  calibrateOverlayToFace,
+  calibrateOverlayToTrackedPose,
+  createOverlayFromPreset,
   getFaceAnchorDiagnostics,
-  smoothDetectedFaceFrame,
+  getHeroPreset,
+  inferPresetIdFromStyleName,
+  normalizePresetTuning,
+  smoothTrackedFacePose,
 } from "@/lib/styleStudio";
 import HairstyleOverlay from "./HairstyleOverlay";
 
-type DetectedFaceLike = {
-  boundingBox?: DOMRectReadOnly;
-};
-
-type FaceDetectorLike = {
-  detect: (
-    input: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement | ImageBitmap
-  ) => Promise<DetectedFaceLike[]>;
-};
-
-type FaceDetectorConstructor = new (options?: {
-  fastMode?: boolean;
-  maxDetectedFaces?: number;
-}) => FaceDetectorLike;
+type RunningMode = "IMAGE" | "VIDEO";
 
 type SpeechRecognitionResultLike = {
   [index: number]: {
@@ -82,6 +84,25 @@ type Props = {
   selfieUrl: string | null;
   selectedStyle: string | null;
   onSelectStyle: (styleName: string) => void;
+  onPortraitAnalyzed: (payload: {
+    suggestions: HairstyleSuggestion[];
+    imageUrl: string;
+    faceProfile: FaceProfile | null;
+  }) => void;
+};
+
+type FaceLandmarkerLike = {
+  setOptions: (options: { runningMode: RunningMode }) => Promise<void>;
+  detect: (image: HTMLImageElement) => {
+    faceLandmarks?: Array<Array<{ x: number; y: number }>>;
+  };
+  detectForVideo: (
+    video: HTMLVideoElement,
+    timestamp: number
+  ) => {
+    faceLandmarks?: Array<Array<{ x: number; y: number }>>;
+  };
+  close?: () => void;
 };
 
 const QUICK_PROMPTS = [
@@ -90,12 +111,16 @@ const QUICK_PROMPTS = [
   "Edgy texture, volume, and a little runway energy.",
 ];
 
-const FACE_LOCK_SMOOTHING = 0.3;
+const MEDIAPIPE_WASM_URL =
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm";
+const MEDIAPIPE_MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const FACE_LOCK_HOLD_MS = 1800;
-const FACE_LOCK_SCAN_INTERVAL_MS = 320;
-
+const FACE_SCAN_INTERVAL_MS = 180;
+const AUTO_RENDER_DELAY_MS = 1500;
+const AUTO_RENDER_COOLDOWN_MS = 7000;
 const INITIAL_AGENT_REPLY =
-  "Turn on the webcam or use your uploaded selfie, then tell the agent what vibe you want. I’ll turn that into a live preview-friendly mashup.";
+  "Tell me the vibe first. I’ll pick the closest salon-grade preset, keep it tracking on camera, and generate a realistic on-face render once the framing settles.";
 
 const FIT_CONTROLS: Array<{
   key: keyof OverlayAdjustment;
@@ -107,10 +132,8 @@ const FIT_CONTROLS: Array<{
   { key: "offsetY", label: "Crown lift", min: -32, max: 32, step: 1 },
   { key: "height", label: "Length drop", min: -0.08, max: 0.08, step: 0.01 },
   { key: "offsetX", label: "Left / right", min: -24, max: 24, step: 1 },
-  { key: "scale", label: "Overall size", min: -0.08, max: 0.08, step: 0.01 },
   { key: "width", label: "Width", min: -0.08, max: 0.08, step: 0.01 },
-  { key: "rotation", label: "Angle", min: -3, max: 3, step: 0.25 },
-  { key: "opacity", label: "Blend", min: -0.12, max: 0.05, step: 0.01 },
+  { key: "rotation", label: "Angle", min: -5, max: 5, step: 0.25 },
 ];
 
 function getSpeechRecognitionConstructor():
@@ -128,20 +151,6 @@ function getSpeechRecognitionConstructor():
   return maybeWindow.SpeechRecognition || maybeWindow.webkitSpeechRecognition;
 }
 
-function getFaceDetectorConstructor():
-  | FaceDetectorConstructor
-  | undefined {
-  if (typeof window === "undefined") {
-    return undefined;
-  }
-
-  const maybeWindow = window as Window & {
-    FaceDetector?: FaceDetectorConstructor;
-  };
-
-  return maybeWindow.FaceDetector;
-}
-
 function composePreferenceText(...parts: Array<string | null | undefined>) {
   return parts
     .map((part) => part?.trim() || "")
@@ -149,48 +158,15 @@ function composePreferenceText(...parts: Array<string | null | undefined>) {
     .join("\n\n");
 }
 
-function normalizeDetectedFaceFrame(params: {
-  bounds: DOMRectReadOnly;
-  sourceWidth: number;
-  sourceHeight: number;
-  containerWidth: number;
-  containerHeight: number;
-}): DetectedFaceFrame {
-  const {
-    bounds,
-    sourceWidth,
-    sourceHeight,
-    containerWidth,
-    containerHeight,
-  } = params;
-  const scale = Math.max(
-    containerWidth / sourceWidth,
-    containerHeight / sourceHeight
-  );
-  const renderedWidth = sourceWidth * scale;
-  const renderedHeight = sourceHeight * scale;
-  const cropOffsetX = (containerWidth - renderedWidth) / 2;
-  const cropOffsetY = (containerHeight - renderedHeight) / 2;
-  const x = bounds.x * scale + cropOffsetX;
-  const y = bounds.y * scale + cropOffsetY;
-  const right = x + bounds.width * scale;
-  const bottom = y + bounds.height * scale;
+function distanceBetween(
+  left: { x: number; y: number },
+  right: { x: number; y: number }
+) {
+  return Math.hypot(right.x - left.x, right.y - left.y);
+}
 
-  return {
-    x: Math.max(0, Math.min(containerWidth, x)),
-    y: Math.max(0, Math.min(containerHeight, y)),
-    width: Math.max(
-      1,
-      Math.min(containerWidth, right) - Math.max(0, Math.min(containerWidth, x))
-    ),
-    height: Math.max(
-      1,
-      Math.min(containerHeight, bottom) -
-        Math.max(0, Math.min(containerHeight, y))
-    ),
-    frameWidth: containerWidth,
-    frameHeight: containerHeight,
-  };
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 async function objectUrlToDataUrl(objectUrl: string) {
@@ -208,9 +184,157 @@ async function objectUrlToDataUrl(objectUrl: string) {
       reject(new Error("Unable to convert the portrait into a data URL."));
     };
     reader.onerror = () =>
-      reject(new Error("Unable to read the portrait for style board generation."));
+      reject(new Error("Unable to read the portrait for Gemini rendering."));
     reader.readAsDataURL(blob);
   });
+}
+
+function downloadDataUrl(dataUrl: string, filename: string) {
+  const anchor = document.createElement("a");
+  anchor.href = dataUrl;
+  anchor.download = filename;
+  anchor.click();
+}
+
+function normalizePointToContainer(params: {
+  x: number;
+  y: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  containerWidth: number;
+  containerHeight: number;
+}) {
+  const {
+    x,
+    y,
+    sourceWidth,
+    sourceHeight,
+    containerWidth,
+    containerHeight,
+  } = params;
+  const scale = Math.max(
+    containerWidth / sourceWidth,
+    containerHeight / sourceHeight
+  );
+  const renderedWidth = sourceWidth * scale;
+  const renderedHeight = sourceHeight * scale;
+  const cropOffsetX = (containerWidth - renderedWidth) / 2;
+  const cropOffsetY = (containerHeight - renderedHeight) / 2;
+
+  return {
+    x: x * sourceWidth * scale + cropOffsetX,
+    y: y * sourceHeight * scale + cropOffsetY,
+  };
+}
+
+function buildTrackedPoseFromLandmarks(params: {
+  landmarks: Array<{ x: number; y: number }>;
+  sourceWidth: number;
+  sourceHeight: number;
+  containerWidth: number;
+  containerHeight: number;
+  previousPose: TrackedFacePose | null;
+}) {
+  const {
+    landmarks,
+    sourceWidth,
+    sourceHeight,
+    containerWidth,
+    containerHeight,
+    previousPose,
+  } = params;
+  const mapPoint = (index: number) =>
+    normalizePointToContainer({
+      x: landmarks[index]?.x || 0,
+      y: landmarks[index]?.y || 0,
+      sourceWidth,
+      sourceHeight,
+      containerWidth,
+      containerHeight,
+    });
+  const allPoints = landmarks.map((landmark) =>
+    normalizePointToContainer({
+      x: landmark.x,
+      y: landmark.y,
+      sourceWidth,
+      sourceHeight,
+      containerWidth,
+      containerHeight,
+    })
+  );
+  const minX = Math.min(...allPoints.map((point) => point.x));
+  const maxX = Math.max(...allPoints.map((point) => point.x));
+  const minY = Math.min(...allPoints.map((point) => point.y));
+  const maxY = Math.max(...allPoints.map((point) => point.y));
+  const frame = {
+    x: clamp(minX, 0, containerWidth),
+    y: clamp(minY, 0, containerHeight),
+    width: clamp(maxX - minX, 1, containerWidth),
+    height: clamp(maxY - minY, 1, containerHeight),
+    frameWidth: containerWidth,
+    frameHeight: containerHeight,
+  };
+  const foreheadAnchor = mapPoint(10);
+  const crownAnchor = {
+    x: foreheadAnchor.x,
+    y: Math.min(frame.y, foreheadAnchor.y - frame.height * 0.08),
+  };
+  const leftTemple = mapPoint(127);
+  const rightTemple = mapPoint(356);
+  const jawLeft = mapPoint(172);
+  const jawRight = mapPoint(397);
+  const leftEyeOuter = mapPoint(33);
+  const rightEyeOuter = mapPoint(263);
+  const noseTip = mapPoint(1);
+  const chin = mapPoint(152);
+  const faceCenter = {
+    x: frame.x + frame.width / 2,
+    y: frame.y + frame.height / 2,
+  };
+  const eyeAngle = Math.atan2(
+    rightEyeOuter.y - leftEyeOuter.y,
+    rightEyeOuter.x - leftEyeOuter.x
+  );
+  const roll = (eyeAngle * 180) / Math.PI;
+  const templeCenterX = (leftTemple.x + rightTemple.x) / 2;
+  const yaw = clamp(
+    ((noseTip.x - templeCenterX) /
+      Math.max(1, distanceBetween(leftTemple, rightTemple))) *
+      90,
+    -16,
+    16
+  );
+  const pitch = clamp(
+    (((chin.y - noseTip.y) - (noseTip.y - foreheadAnchor.y)) /
+      Math.max(1, frame.height)) *
+      130,
+    -16,
+    16
+  );
+  const movement = previousPose
+    ? Math.abs(faceCenter.x - previousPose.faceCenter.x) / containerWidth +
+      Math.abs(faceCenter.y - previousPose.faceCenter.y) / containerHeight +
+      Math.abs(frame.width - previousPose.frame.width) / containerWidth
+    : 0.05;
+  const stability = clamp(1 - movement * 3.8, 0.2, 1);
+
+  return {
+    frame,
+    foreheadAnchor,
+    crownAnchor,
+    leftTemple,
+    rightTemple,
+    jawLeft,
+    jawRight,
+    faceCenter,
+    templeSpan: distanceBetween(leftTemple, rightTemple),
+    jawSpan: distanceBetween(jawLeft, jawRight),
+    yaw,
+    roll,
+    pitch,
+    stability,
+    timestamp: Date.now(),
+  } satisfies TrackedFacePose;
 }
 
 export default function LiveStyleStudio({
@@ -219,367 +343,583 @@ export default function LiveStyleStudio({
   selfieUrl,
   selectedStyle,
   onSelectStyle,
+  onPortraitAnalyzed,
 }: Props) {
+  const previewFrameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selfieImageRef = useRef<HTMLImageElement | null>(null);
-  const previewFrameRef = useRef<HTMLDivElement | null>(null);
+  const portraitInputRef = useRef<HTMLInputElement | null>(null);
+  const landmarkerRef = useRef<FaceLandmarkerLike | null>(null);
+  const runningModeRef = useRef<RunningMode>("VIDEO");
+  const detectionLoopRef = useRef<number | null>(null);
+  const detectionBusyRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const detectorRef = useRef<FaceDetectorLike | null>(null);
-  const detectionFrameRef = useRef<number | null>(null);
-  const skipSyncStyleRef = useRef<string | null>(null);
-  const faceFrameRef = useRef<DetectedFaceFrame | null>(null);
   const lastFaceSeenAtRef = useRef(0);
+  const trackedPoseRef = useRef<TrackedFacePose | null>(null);
+  const skipSyncStyleRef = useRef<string | null>(null);
   const speechBasePreferencesRef = useRef("");
   const speechCommittedTranscriptRef = useRef("");
+  const lastRenderAtRef = useRef(0);
+  const lastRenderSignatureRef = useRef("");
+  const autoRenderTimeoutRef = useRef<number | null>(null);
 
-  const previewStyle = selectedStyle || suggestions[0]?.name || "Textured Bob";
-  const [overlayBlueprint, setOverlayBlueprint] = useState(() =>
-    createOverlayFromStyle(previewStyle)
+  const initialPresetId = inferPresetIdFromStyleName(
+    selectedStyle || suggestions[0]?.name
   );
-  const [fitAdjustment, setFitAdjustment] =
-    useState<OverlayAdjustment>(DEFAULT_OVERLAY_ADJUSTMENT);
-  const [mashupName, setMashupName] = useState(previewStyle);
+  const initialPreset = getHeroPreset(initialPresetId);
+
+  const [presetId, setPresetId] = useState(initialPresetId);
+  const [tuning, setTuning] = useState<PresetTuning>(() =>
+    normalizePresetTuning(initialPresetId)
+  );
+  const [makeoverLevel, setMakeoverLevel] = useState<MakeoverLevel>(
+    initialPreset.makeoverBias
+  );
+  const [mashupName, setMashupName] = useState(initialPreset.label);
   const [agentReply, setAgentReply] = useState(INITIAL_AGENT_REPLY);
+  const [agentSummary, setAgentSummary] = useState("Preset tracking ready");
   const [preferences, setPreferences] = useState("");
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const [speechDraft, setSpeechDraft] = useState("");
   const [voiceError, setVoiceError] = useState<string | null>(null);
-  const [agentLoading, setAgentLoading] = useState(false);
-  const [agentSummary, setAgentSummary] = useState("Live overlay ready");
-  const [voiceReplyEnabled, setVoiceReplyEnabled] = useState(true);
   const [speechRecognitionSupported, setSpeechRecognitionSupported] =
     useState(false);
   const [speechSynthesisSupported, setSpeechSynthesisSupported] =
     useState(false);
+  const [voiceReplyEnabled, setVoiceReplyEnabled] = useState(true);
   const [speaking, setSpeaking] = useState(false);
-  const [detectedFaceFrame, setDetectedFaceFrame] =
-    useState<DetectedFaceFrame | null>(null);
-  const [faceLockAvailable, setFaceLockAvailable] = useState(false);
+  const [trackingReady, setTrackingReady] = useState(false);
+  const [trackingError, setTrackingError] = useState<string | null>(null);
+  const [trackedPose, setTrackedPose] = useState<TrackedFacePose | null>(null);
   const [faceLockActive, setFaceLockActive] = useState(false);
   const [faceLockHolding, setFaceLockHolding] = useState(false);
+  const [fitAdjustment, setFitAdjustment] =
+    useState<OverlayAdjustment>(DEFAULT_OVERLAY_ADJUSTMENT);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [portraitFile, setPortraitFile] = useState<File | null>(null);
+  const [draftPortraitUrl, setDraftPortraitUrl] = useState<string | null>(null);
+  const [portraitBusy, setPortraitBusy] = useState(false);
+  const [portraitError, setPortraitError] = useState<string | null>(null);
+  const [renderLookLoading, setRenderLookLoading] = useState(false);
+  const [renderLookError, setRenderLookError] = useState<string | null>(null);
+  const [renderLook, setRenderLook] = useState<RenderLookResponse | null>(null);
   const [styleBoardLoading, setStyleBoardLoading] = useState(false);
   const [styleBoardError, setStyleBoardError] = useState<string | null>(null);
   const [styleBoard, setStyleBoard] = useState<StyleBoardResponse | null>(null);
   const [sessionTurns, setSessionTurns] = useState<StyleAgentTurn[]>([
-    {
-      speaker: "agent",
-      text: INITIAL_AGENT_REPLY,
-    },
+    { speaker: "agent", text: INITIAL_AGENT_REPLY },
   ]);
+
+  const activeSelfieUrl = draftPortraitUrl || selfieUrl;
+  const preset = getHeroPreset(presetId);
   const overlaySourceMode = cameraActive
     ? "webcam"
-    : selfieUrl
+    : activeSelfieUrl
       ? "selfie"
       : "mannequin";
-  const calibratedOverlay = detectedFaceFrame
-    ? calibrateOverlayToDetectedFace(
-        calibrateOverlayToFace(overlayBlueprint, faceProfile, overlaySourceMode),
-        detectedFaceFrame
-      )
-    : calibrateOverlayToFace(overlayBlueprint, faceProfile, overlaySourceMode);
+  const baseOverlay = createOverlayFromPreset(presetId, tuning, makeoverLevel);
+  const calibratedOverlay = calibrateOverlayToTrackedPose(
+    calibrateOverlayToFace(baseOverlay, faceProfile, overlaySourceMode),
+    trackedPose
+  );
   const overlay = applyOverlayAdjustment(calibratedOverlay, fitAdjustment);
-  const displayFaceFrame =
-    cameraActive && detectedFaceFrame
-      ? {
-          ...detectedFaceFrame,
-          x:
-            detectedFaceFrame.frameWidth -
-            detectedFaceFrame.x -
-            detectedFaceFrame.width,
-        }
-      : detectedFaceFrame;
-  const previewOverlay =
-    cameraActive
-      ? {
-          ...overlay,
-          fit: {
-            ...overlay.fit,
-            offsetX: -overlay.fit.offsetX,
-            rotation: -overlay.fit.rotation,
-          },
-        }
-      : overlay;
+  const previewOverlay = cameraActive
+    ? {
+        ...overlay,
+        fit: {
+          ...overlay.fit,
+          offsetX: -overlay.fit.offsetX,
+          rotation: -overlay.fit.rotation,
+        },
+      }
+    : overlay;
+  const anchorDiagnostics = getFaceAnchorDiagnostics(trackedPose);
   const fitAdjusted = FIT_CONTROLS.some(
     ({ key }) => Math.abs(fitAdjustment[key]) > 0.001
   );
-
-  useEffect(() => {
-    if (skipSyncStyleRef.current === previewStyle) {
-      skipSyncStyleRef.current = null;
-      return;
-    }
-
-    setOverlayBlueprint(createOverlayFromStyle(previewStyle, preferences));
-    setMashupName(previewStyle);
-  }, [preferences, previewStyle]);
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      setSpeechRecognitionSupported(Boolean(getSpeechRecognitionConstructor()));
-      setSpeechSynthesisSupported("speechSynthesis" in window);
-      setFaceLockAvailable(Boolean(getFaceDetectorConstructor()));
-    }
-
-    return () => {
-      recognitionRef.current?.stop();
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      if (detectionFrameRef.current) {
-        cancelAnimationFrame(detectionFrameRef.current);
-      }
-
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!selfieUrl && !cameraActive) {
-      setDetectedFaceFrame(null);
-      setFaceLockActive(false);
-      setFaceLockHolding(false);
-      faceFrameRef.current = null;
-      lastFaceSeenAtRef.current = 0;
-    }
-  }, [cameraActive, selfieUrl]);
-
-  useEffect(() => {
-    faceFrameRef.current = detectedFaceFrame;
-  }, [detectedFaceFrame]);
-
-  useEffect(() => {
-    setStyleBoard(null);
-    setStyleBoardError(null);
-  }, [agentReply, agentSummary, mashupName, previewStyle, selfieUrl]);
-
-  const detectFaceInElement = useCallback(
-    async (params: {
-      element: HTMLImageElement | HTMLVideoElement;
-      sourceWidth: number;
-      sourceHeight: number;
-    }) => {
-      const Detector = getFaceDetectorConstructor();
-      const previewFrame = previewFrameRef.current;
-
-      if (!Detector || !previewFrame) {
-        setFaceLockActive(false);
-        return false;
-      }
-
-      if (!detectorRef.current) {
-        detectorRef.current = new Detector({
-          fastMode: true,
-          maxDetectedFaces: 1,
-        });
-      }
-
-      try {
-        const faces = await detectorRef.current.detect(params.element);
-        const face = faces[0];
-
-        if (!face?.boundingBox) {
-          const shouldHoldLock =
-            Date.now() - lastFaceSeenAtRef.current < FACE_LOCK_HOLD_MS &&
-            Boolean(faceFrameRef.current);
-
-          setFaceLockActive(false);
-          setFaceLockHolding(shouldHoldLock);
-
-          if (!shouldHoldLock) {
-            setDetectedFaceFrame(null);
-            faceFrameRef.current = null;
-          }
-
-          return false;
+  const displayPoseFrame = trackedPose
+    ? cameraActive
+      ? {
+          ...trackedPose.frame,
+          x:
+            trackedPose.frame.frameWidth -
+            trackedPose.frame.x -
+            trackedPose.frame.width,
         }
-
-        const frame = normalizeDetectedFaceFrame({
-          bounds: face.boundingBox,
-          sourceWidth: params.sourceWidth,
-          sourceHeight: params.sourceHeight,
-          containerWidth: previewFrame.clientWidth,
-          containerHeight: previewFrame.clientHeight,
-        });
-
-        lastFaceSeenAtRef.current = Date.now();
-        setDetectedFaceFrame((currentFrame) =>
-          smoothDetectedFaceFrame(
-            currentFrame,
-            frame,
-            cameraActive ? FACE_LOCK_SMOOTHING : 0.45
-          )
-        );
-        setFaceLockActive(true);
-        setFaceLockHolding(false);
-        return true;
-      } catch (error) {
-        console.error("Face detection failed:", error);
-        setFaceLockActive(false);
-        setFaceLockHolding(false);
-        return false;
-      }
-    },
-    [cameraActive]
+      : trackedPose.frame
+    : null;
+  const renderSignature = useMemo(
+    () =>
+      JSON.stringify({
+        presetId,
+        tuning,
+        makeoverLevel,
+        source: activeSelfieUrl ? "selfie" : cameraActive ? "camera" : "none",
+      }),
+    [activeSelfieUrl, cameraActive, makeoverLevel, presetId, tuning]
   );
 
-  useEffect(() => {
-    const image = selfieImageRef.current;
-
-    if (!selfieUrl || cameraActive || !image || !faceLockAvailable) {
+  const ensureTrackingMode = useCallback(async (mode: RunningMode) => {
+    if (!landmarkerRef.current || runningModeRef.current === mode) {
       return;
     }
 
-    const run = async () => {
-      if (!image.complete || image.naturalWidth === 0 || image.naturalHeight === 0) {
+    await landmarkerRef.current.setOptions({ runningMode: mode });
+    runningModeRef.current = mode;
+  }, []);
+
+  const updateTrackedPose = useCallback((nextPose: TrackedFacePose | null) => {
+    if (!nextPose) {
+      const shouldHoldLock =
+        Date.now() - lastFaceSeenAtRef.current < FACE_LOCK_HOLD_MS &&
+        Boolean(trackedPoseRef.current);
+
+      setFaceLockActive(false);
+      setFaceLockHolding(shouldHoldLock);
+
+      if (!shouldHoldLock) {
+        trackedPoseRef.current = null;
+        setTrackedPose(null);
+      }
+
+      return;
+    }
+
+    lastFaceSeenAtRef.current = Date.now();
+    setFaceLockActive(true);
+    setFaceLockHolding(false);
+    setTrackedPose((currentPose) => {
+      const smoothed = smoothTrackedFacePose(
+        currentPose,
+        nextPose,
+        cameraActive ? 0.3 : 0.42
+      );
+      trackedPoseRef.current = smoothed;
+      return smoothed;
+    });
+  }, [cameraActive]);
+
+  const detectPoseInElement = useCallback(
+    async (element: HTMLVideoElement | HTMLImageElement, mode: RunningMode) => {
+      const previewFrame = previewFrameRef.current;
+
+      if (!previewFrame || !landmarkerRef.current) {
+        updateTrackedPose(null);
         return;
       }
 
-      await detectFaceInElement({
-        element: image,
-        sourceWidth: image.naturalWidth,
-        sourceHeight: image.naturalHeight,
+      const sourceWidth =
+        element instanceof HTMLVideoElement ? element.videoWidth : element.naturalWidth;
+      const sourceHeight =
+        element instanceof HTMLVideoElement ? element.videoHeight : element.naturalHeight;
+
+      if (!sourceWidth || !sourceHeight) {
+        updateTrackedPose(null);
+        return;
+      }
+
+      await ensureTrackingMode(mode);
+
+      const result =
+        mode === "VIDEO"
+          ? landmarkerRef.current.detectForVideo(
+              element as HTMLVideoElement,
+              performance.now()
+            )
+          : landmarkerRef.current.detect(element as HTMLImageElement);
+      const landmarks = result?.faceLandmarks?.[0];
+
+      if (!landmarks || landmarks.length === 0) {
+        updateTrackedPose(null);
+        return;
+      }
+
+      const nextPose = buildTrackedPoseFromLandmarks({
+        landmarks,
+        sourceWidth,
+        sourceHeight,
+        containerWidth: previewFrame.clientWidth,
+        containerHeight: previewFrame.clientHeight,
+        previousPose: trackedPoseRef.current,
       });
-    };
 
-    void run();
-  }, [cameraActive, detectFaceInElement, faceLockAvailable, selfieUrl]);
+      updateTrackedPose(nextPose);
+    },
+    [ensureTrackingMode, updateTrackedPose]
+  );
 
-  useEffect(() => {
-    if (!cameraActive || !faceLockAvailable) {
-      return;
+  const captureReferenceDataUrl = useCallback(async () => {
+    if (activeSelfieUrl) {
+      return objectUrlToDataUrl(activeSelfieUrl);
     }
 
-    let cancelled = false;
-    let lastDetectionAt = 0;
-
-    const loop = async (timestamp: number) => {
-      if (cancelled) {
-        return;
-      }
-
+    if (cameraActive && videoRef.current) {
       const video = videoRef.current;
 
-      if (
-        video &&
-        video.readyState >= 2 &&
-        video.videoWidth > 0 &&
-        video.videoHeight > 0 &&
-        timestamp - lastDetectionAt > FACE_LOCK_SCAN_INTERVAL_MS
-      ) {
-        lastDetectionAt = timestamp;
-        await detectFaceInElement({
-          element: video,
-          sourceWidth: video.videoWidth,
-          sourceHeight: video.videoHeight,
-        });
+      if (video.videoWidth === 0 || video.videoHeight === 0) {
+        return null;
       }
 
-      detectionFrameRef.current = requestAnimationFrame(loop);
-    };
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext("2d");
 
-    detectionFrameRef.current = requestAnimationFrame(loop);
-
-    return () => {
-      cancelled = true;
-      if (detectionFrameRef.current) {
-        cancelAnimationFrame(detectionFrameRef.current);
-        detectionFrameRef.current = null;
+      if (!context) {
+        return null;
       }
-    };
-  }, [cameraActive, detectFaceInElement, faceLockAvailable]);
 
-  const refreshSelfieFaceLock = useCallback(() => {
-    const image = selfieImageRef.current;
+      context.translate(canvas.width, 0);
+      context.scale(-1, 1);
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/jpeg", 0.94);
+    }
 
+    return null;
+  }, [activeSelfieUrl, cameraActive]);
+
+  const stopSpeaking = useCallback(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    setSpeaking(false);
+  }, []);
+
+  const speakReply = useCallback((text: string) => {
     if (
-      cameraActive ||
-      !selfieUrl ||
-      !image ||
-      !image.complete ||
-      image.naturalWidth === 0 ||
-      image.naturalHeight === 0
+      typeof window === "undefined" ||
+      !("speechSynthesis" in window) ||
+      !text.trim()
     ) {
       return;
     }
 
-    void detectFaceInElement({
-      element: image,
-      sourceWidth: image.naturalWidth,
-      sourceHeight: image.naturalHeight,
-    });
-  }, [cameraActive, detectFaceInElement, selfieUrl]);
+    const synth = window.speechSynthesis;
+    const utterance = new SpeechSynthesisUtterance(text);
+    const preferredVoice = synth
+      .getVoices()
+      .find((voice) => voice.lang.toLowerCase().startsWith("en"));
 
-  const realignOverlayFromFaceLock = useCallback(() => {
-    setFitAdjustment(DEFAULT_OVERLAY_ADJUSTMENT);
+    if (preferredVoice) {
+      utterance.voice = preferredVoice;
+    }
 
-    if (cameraActive) {
-      const video = videoRef.current;
+    utterance.rate = 0.97;
+    utterance.pitch = 1.02;
+    utterance.onstart = () => setSpeaking(true);
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
 
-      if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
+    synth.cancel();
+    synth.speak(utterance);
+  }, []);
+
+  const handleRenderLook = useCallback(
+    async (mode: "manual" | "auto") => {
+      const referenceDataUrl = await captureReferenceDataUrl();
+
+      if (!referenceDataUrl) {
+        setRenderLookError(
+          "Add a portrait or turn on the webcam before generating the realistic render."
+        );
         return;
       }
 
-      void detectFaceInElement({
-        element: video,
-        sourceWidth: video.videoWidth,
-        sourceHeight: video.videoHeight,
-      });
+      if (mode === "auto" && Date.now() - lastRenderAtRef.current < AUTO_RENDER_COOLDOWN_MS) {
+        return;
+      }
+
+      setRenderLookLoading(true);
+      setRenderLookError(null);
+
+      try {
+        const response = await fetch("/api/render-look", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            selectedStyle: preset.label,
+            presetId,
+            presetLabel: preset.label,
+            tuning,
+            makeoverLevel,
+            preferences,
+            preferencesSummary: agentSummary,
+            stylistReply: agentReply,
+            faceProfile,
+            selfieDataUrl: referenceDataUrl,
+          }),
+        });
+        const data = (await response.json()) as
+          | RenderLookResponse
+          | { error?: string };
+
+        if (!response.ok || !("imageDataUrl" in data)) {
+          const message =
+            "error" in data ? data.error : "The realistic look could not be rendered.";
+          throw new Error(message || "The realistic look could not be rendered.");
+        }
+
+        setRenderLook(data);
+        lastRenderAtRef.current = Date.now();
+        lastRenderSignatureRef.current = renderSignature;
+      } catch (error) {
+        setRenderLookError(
+          error instanceof Error
+            ? error.message
+            : "The realistic look could not be rendered."
+        );
+      } finally {
+        setRenderLookLoading(false);
+      }
+    },
+    [
+      agentReply,
+      agentSummary,
+      captureReferenceDataUrl,
+      faceProfile,
+      makeoverLevel,
+      preferences,
+      preset.label,
+      presetId,
+      renderSignature,
+      tuning,
+    ]
+  );
+
+  const handleGenerateStyleBoard = useCallback(async () => {
+    const referenceDataUrl = await captureReferenceDataUrl();
+
+    if (!referenceDataUrl) {
+      setStyleBoardError(
+        "Add a portrait or turn on the webcam before generating the style board."
+      );
       return;
     }
 
-    refreshSelfieFaceLock();
-  }, [cameraActive, detectFaceInElement, refreshSelfieFaceLock]);
+    setStyleBoardLoading(true);
+    setStyleBoardError(null);
 
-  useEffect(() => {
-    const previewFrame = previewFrameRef.current;
-    const image = selfieImageRef.current;
+    try {
+      const response = await fetch("/api/style-board", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          selectedStyle: preset.label,
+          presetId,
+          presetLabel: preset.label,
+          tuning,
+          makeoverLevel,
+          mashupName,
+          preferences,
+          preferencesSummary: agentSummary,
+          stylistReply: agentReply,
+          faceProfile,
+          selfieDataUrl: referenceDataUrl,
+        }),
+      });
+      const data = (await response.json()) as
+        | StyleBoardResponse
+        | { error?: string };
 
-    if (!previewFrame || !image || cameraActive || !selfieUrl || !faceLockAvailable) {
+      if (!response.ok || !("imageDataUrl" in data)) {
+        const message =
+          "error" in data ? data.error : "The style board could not be generated.";
+        throw new Error(message || "The style board could not be generated.");
+      }
+
+      setStyleBoard(data);
+    } catch (error) {
+      setStyleBoardError(
+        error instanceof Error
+          ? error.message
+          : "The style board could not be generated."
+      );
+    } finally {
+      setStyleBoardLoading(false);
+    }
+  }, [
+    agentReply,
+    agentSummary,
+    captureReferenceDataUrl,
+    faceProfile,
+    makeoverLevel,
+    mashupName,
+    preferences,
+    preset.label,
+    presetId,
+    tuning,
+  ]);
+
+  const handlePresetSelect = useCallback(
+    (styleName: string) => {
+      const nextPresetId = inferPresetIdFromStyleName(styleName);
+      const nextPreset = getHeroPreset(nextPresetId);
+
+      skipSyncStyleRef.current = styleName;
+      setPresetId(nextPresetId);
+      setTuning(normalizePresetTuning(nextPresetId));
+      setMakeoverLevel(nextPreset.makeoverBias);
+      setMashupName(nextPreset.label);
+      setAgentSummary(`${nextPreset.label} selected for live tracking`);
+      onSelectStyle(nextPreset.label);
+      setRenderLook(null);
+      setStyleBoard(null);
+    },
+    [onSelectStyle]
+  );
+
+  const handleAgentSubmit = useCallback(async () => {
+    const composedPreferences = listening
+      ? composePreferenceText(
+          speechBasePreferencesRef.current,
+          speechCommittedTranscriptRef.current,
+          speechDraft
+        )
+      : preferences;
+    const trimmedPreferences = composedPreferences.trim();
+
+    if (listening) {
+      setPreferences(composedPreferences);
+      setSpeechDraft("");
+      recognitionRef.current?.stop();
+      setListening(false);
+    }
+
+    if (speechSynthesisSupported) {
+      stopSpeaking();
+    }
+
+    setAgentLoading(true);
+    setVoiceError(null);
+
+    try {
+      const response = await fetch("/api/style-agent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          preferences: composedPreferences,
+          currentStyle: preset.label,
+          suggestions,
+          conversationHistory: sessionTurns.slice(-6),
+        }),
+      });
+      const data = (await response.json()) as
+        | StyleAgentResponse
+        | { error?: string };
+
+      if (!response.ok || !("presetId" in data)) {
+        const message =
+          "error" in data ? data.error : "The style agent could not respond.";
+        throw new Error(message || "The style agent could not respond.");
+      }
+
+      skipSyncStyleRef.current = data.selectedStyle;
+      setPresetId(data.presetId);
+      setTuning(data.tuning);
+      setMakeoverLevel(data.makeoverLevel);
+      setMashupName(data.mashupName);
+      setAgentReply(data.agentReply);
+      setAgentSummary(data.preferencesSummary);
+      setRenderLook(null);
+      setStyleBoard(null);
+      startTransition(() => {
+        setSessionTurns((currentTurns) => {
+          const nextTurns: StyleAgentTurn[] = trimmedPreferences
+            ? [
+                ...currentTurns,
+                { speaker: "user", text: trimmedPreferences },
+                { speaker: "agent", text: data.agentReply },
+              ]
+            : [...currentTurns, { speaker: "agent", text: data.agentReply }];
+
+          return nextTurns.slice(-6);
+        });
+      });
+      onSelectStyle(data.selectedStyle);
+
+      if (voiceReplyEnabled && speechSynthesisSupported) {
+        speakReply(data.agentReply);
+      }
+    } catch (error) {
+      setVoiceError(
+        error instanceof Error
+          ? error.message
+          : "The style agent could not respond."
+      );
+    } finally {
+      setAgentLoading(false);
+    }
+  }, [
+    listening,
+    onSelectStyle,
+    preferences,
+    preset.label,
+    sessionTurns,
+    speakReply,
+    speechDraft,
+    speechSynthesisSupported,
+    stopSpeaking,
+    suggestions,
+    voiceReplyEnabled,
+  ]);
+
+  const handlePortraitAnalyze = useCallback(async () => {
+    if (!portraitFile || !draftPortraitUrl) {
+      setPortraitError("Choose a portrait before analyzing it.");
       return;
     }
 
-    let frameId: number | null = null;
-    const scheduleRefresh = () => {
-      if (frameId) {
-        cancelAnimationFrame(frameId);
+    setPortraitBusy(true);
+    setPortraitError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", portraitFile);
+
+      const response = await fetch("/api/analyze-selfie", {
+        method: "POST",
+        body: formData,
+      });
+      const data = (await response.json()) as {
+        suggestions?: HairstyleSuggestion[];
+        faceProfile?: FaceProfile;
+        error?: string;
+      };
+
+      if (!response.ok || !data.suggestions) {
+        throw new Error(data.error || "We couldn't analyze that portrait.");
       }
 
-      frameId = requestAnimationFrame(() => {
-        refreshSelfieFaceLock();
+      onPortraitAnalyzed({
+        suggestions: data.suggestions,
+        imageUrl: draftPortraitUrl,
+        faceProfile: data.faceProfile || null,
       });
-    };
-
-    scheduleRefresh();
-    image.addEventListener("load", scheduleRefresh);
-
-    let resizeObserver: ResizeObserver | null = null;
-    const supportsResizeObserver = typeof ResizeObserver !== "undefined";
-
-    if (supportsResizeObserver) {
-      resizeObserver = new ResizeObserver(() => {
-        scheduleRefresh();
-      });
-      resizeObserver.observe(previewFrame);
-    } else {
-      window.addEventListener("resize", scheduleRefresh);
+      setRenderLook(null);
+      setStyleBoard(null);
+    } catch (error) {
+      setPortraitError(
+        error instanceof Error
+          ? error.message
+          : "We couldn't analyze that portrait."
+      );
+    } finally {
+      setPortraitBusy(false);
     }
+  }, [draftPortraitUrl, onPortraitAnalyzed, portraitFile]);
 
-    return () => {
-      image.removeEventListener("load", scheduleRefresh);
-      resizeObserver?.disconnect();
-      if (!supportsResizeObserver) {
-        window.removeEventListener("resize", scheduleRefresh);
-      }
-      if (frameId) {
-        cancelAnimationFrame(frameId);
-      }
-    };
-  }, [cameraActive, faceLockAvailable, refreshSelfieFaceLock, selfieUrl]);
-
-  const startCamera = async () => {
+  const startCamera = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError("Webcam access is not supported in this browser.");
       return;
@@ -591,10 +931,7 @@ export default function LiveStyleStudio({
         audio: false,
       });
 
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
-
+      streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = stream;
 
       if (videoRef.current) {
@@ -604,17 +941,17 @@ export default function LiveStyleStudio({
 
       setCameraActive(true);
       setCameraError(null);
-      setFaceLockHolding(false);
+      setRenderLook(null);
     } catch (error) {
       console.error("Failed to start webcam:", error);
       setCameraError(
-        "We couldn’t access the webcam. You can still use the uploaded selfie preview."
+        "We couldn’t access the webcam. You can still personalize the session with a portrait."
       );
       setCameraActive(false);
     }
-  };
+  }, []);
 
-  const stopCamera = () => {
+  const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) {
@@ -622,9 +959,9 @@ export default function LiveStyleStudio({
     }
     setCameraActive(false);
     setFaceLockHolding(false);
-  };
+  }, []);
 
-  const toggleListening = () => {
+  const toggleListening = useCallback(() => {
     if (listening) {
       const committedPreferences = composePreferenceText(
         speechBasePreferencesRef.current,
@@ -642,7 +979,7 @@ export default function LiveStyleStudio({
 
     if (!Recognition) {
       setVoiceError(
-        "Voice capture works best in Chrome-based browsers. You can still type your preferences below."
+        "Voice capture works best in Chrome. You can still type your direction below."
       );
       return;
     }
@@ -708,234 +1045,271 @@ export default function LiveStyleStudio({
     recognition.start();
     setListening(true);
     setVoiceError(null);
-  };
+  }, [listening, preferences, speechDraft]);
 
-  const stopSpeaking = () => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return;
-    }
+  useEffect(() => {
+    setSpeechRecognitionSupported(Boolean(getSpeechRecognitionConstructor()));
+    setSpeechSynthesisSupported(
+      typeof window !== "undefined" && "speechSynthesis" in window
+    );
+  }, []);
 
-    window.speechSynthesis.cancel();
-    setSpeaking(false);
-  };
+  useEffect(() => {
+    let cancelled = false;
 
-  const speakReply = (text: string) => {
-    if (
-      typeof window === "undefined" ||
-      !("speechSynthesis" in window) ||
-      !text.trim()
-    ) {
-      return;
-    }
+    const bootMediaPipe = async () => {
+      try {
+        const vision = await import("@mediapipe/tasks-vision");
+        const fileset = await vision.FilesetResolver.forVisionTasks(
+          MEDIAPIPE_WASM_URL
+        );
+        const landmarker = await vision.FaceLandmarker.createFromOptions(
+          fileset,
+          {
+            baseOptions: {
+              modelAssetPath: MEDIAPIPE_MODEL_URL,
+            },
+            runningMode: "VIDEO",
+            numFaces: 1,
+            outputFaceBlendshapes: false,
+            outputFacialTransformationMatrixes: false,
+            minFaceDetectionConfidence: 0.55,
+            minFacePresenceConfidence: 0.55,
+            minTrackingConfidence: 0.55,
+          }
+        );
 
-    const synth = window.speechSynthesis;
-    const utterance = new SpeechSynthesisUtterance(text);
-    const preferredVoice = synth
-      .getVoices()
-      .find((voice) => voice.lang.toLowerCase().startsWith("en"));
+        if (cancelled) {
+          landmarker.close?.();
+          return;
+        }
 
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
-    }
+        landmarkerRef.current = landmarker;
+        runningModeRef.current = "VIDEO";
+        setTrackingReady(true);
+      } catch (error) {
+        console.error("Unable to boot MediaPipe Face Landmarker:", error);
+        setTrackingError(
+          "MediaPipe face tracking could not load. The studio will stay in manual alignment mode."
+        );
+      }
+    };
 
-    utterance.rate = 0.97;
-    utterance.pitch = 1.02;
-    utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = () => setSpeaking(false);
+    void bootMediaPipe();
 
-    synth.cancel();
-    synth.speak(utterance);
-  };
-
-  const handleAgentSubmit = async () => {
-    const composedPreferences = listening
-      ? composePreferenceText(
-          speechBasePreferencesRef.current,
-          speechCommittedTranscriptRef.current,
-          speechDraft
-        )
-      : preferences;
-    const trimmedPreferences = composedPreferences.trim();
-
-    if (listening) {
-      setPreferences(composedPreferences);
-      setSpeechDraft("");
+    return () => {
+      cancelled = true;
       recognitionRef.current?.stop();
-      setListening(false);
-    }
-
-    if (speechSynthesisSupported) {
-      stopSpeaking();
-    }
-
-    setAgentLoading(true);
-    setVoiceError(null);
-
-    try {
-      const response = await fetch("/api/style-agent", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          preferences: composedPreferences,
-          currentStyle: selectedStyle,
-          suggestions,
-          conversationHistory: sessionTurns.slice(-6),
-        }),
-      });
-
-      const data = (await response.json()) as
-        | StyleAgentResponse
-        | { error?: string };
-
-      if (!response.ok || !("overlay" in data)) {
-        const message =
-          "error" in data ? data.error : "The style agent could not respond.";
-        throw new Error(message || "The style agent could not respond.");
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      if (detectionLoopRef.current) {
+        cancelAnimationFrame(detectionLoopRef.current);
       }
-
-      skipSyncStyleRef.current = data.selectedStyle;
-      setOverlayBlueprint(data.overlay);
-      setMashupName(data.mashupName);
-      setAgentReply(data.agentReply);
-      setAgentSummary(data.preferencesSummary);
-      setSessionTurns((currentTurns) => {
-        const nextTurns: StyleAgentTurn[] = trimmedPreferences
-          ? [
-              ...currentTurns,
-              { speaker: "user", text: trimmedPreferences },
-              { speaker: "agent", text: data.agentReply },
-            ]
-          : [...currentTurns, { speaker: "agent", text: data.agentReply }];
-
-        return nextTurns.slice(-6);
-      });
-      onSelectStyle(data.selectedStyle);
-
-      if (voiceReplyEnabled && speechSynthesisSupported) {
-        speakReply(data.agentReply);
+      if (autoRenderTimeoutRef.current) {
+        window.clearTimeout(autoRenderTimeoutRef.current);
       }
-    } catch (error) {
-      setVoiceError(
-        error instanceof Error
-          ? error.message
-          : "The style agent could not respond."
-      );
-    } finally {
-      setAgentLoading(false);
-    }
-  };
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+      landmarkerRef.current?.close?.();
+      landmarkerRef.current = null;
+    };
+  }, []);
 
-  const handleGenerateStyleBoard = async () => {
-    setStyleBoardLoading(true);
+  useEffect(() => {
+    if (skipSyncStyleRef.current === selectedStyle) {
+      skipSyncStyleRef.current = null;
+      return;
+    }
+
+    const nextStyle = selectedStyle || suggestions[0]?.name;
+
+    if (!nextStyle) {
+      return;
+    }
+
+    const nextPresetId = inferPresetIdFromStyleName(nextStyle);
+    const nextPreset = getHeroPreset(nextPresetId);
+    setPresetId(nextPresetId);
+    setTuning((current) => normalizePresetTuning(nextPresetId, current));
+    setMakeoverLevel(nextPreset.makeoverBias);
+    setMashupName(nextPreset.label);
+  }, [selectedStyle, suggestions]);
+
+  useEffect(() => {
+    if (portraitFile) {
+      const objectUrl = URL.createObjectURL(portraitFile);
+      setDraftPortraitUrl(objectUrl);
+
+      return () => {
+        URL.revokeObjectURL(objectUrl);
+      };
+    }
+
+    setDraftPortraitUrl(null);
+  }, [portraitFile]);
+
+  useEffect(() => {
+    trackedPoseRef.current = trackedPose;
+  }, [trackedPose]);
+
+  useEffect(() => {
+    setRenderLook(null);
+    setRenderLookError(null);
+    setStyleBoard(null);
     setStyleBoardError(null);
+  }, [mashupName, presetId, tuning, makeoverLevel]);
 
-    try {
-      const selfieDataUrl = selfieUrl ? await objectUrlToDataUrl(selfieUrl) : null;
-      const response = await fetch("/api/style-board", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          selectedStyle: previewStyle,
-          mashupName,
-          preferences,
-          preferencesSummary: agentSummary,
-          stylistReply: agentReply,
-          faceProfile,
-          selfieDataUrl,
-        }),
-      });
-
-      const data = (await response.json()) as
-        | StyleBoardResponse
-        | { error?: string };
-
-      if (!response.ok || !("imageDataUrl" in data)) {
-        const message =
-          "error" in data ? data.error : "The style board could not be generated.";
-        throw new Error(message || "The style board could not be generated.");
-      }
-
-      setStyleBoard(data);
-    } catch (error) {
-      setStyleBoardError(
-        error instanceof Error
-          ? error.message
-          : "The style board could not be generated."
-      );
-    } finally {
-      setStyleBoardLoading(false);
+  useEffect(() => {
+    if (!cameraActive || !trackingReady || !videoRef.current) {
+      return;
     }
-  };
 
-  const previewBackground =
-    !cameraActive && selfieUrl
-      ? { backgroundImage: `url(${selfieUrl})` }
-      : undefined;
+    let cancelled = false;
+    let lastDetectionAt = 0;
+
+    const loop = async (timestamp: number) => {
+      if (cancelled) {
+        return;
+      }
+
+      const video = videoRef.current;
+
+      if (
+        video &&
+        video.readyState >= 2 &&
+        !detectionBusyRef.current &&
+        timestamp - lastDetectionAt > FACE_SCAN_INTERVAL_MS
+      ) {
+        detectionBusyRef.current = true;
+        lastDetectionAt = timestamp;
+
+        try {
+          await detectPoseInElement(video, "VIDEO");
+        } finally {
+          detectionBusyRef.current = false;
+        }
+      }
+
+      detectionLoopRef.current = requestAnimationFrame(loop);
+    };
+
+    detectionLoopRef.current = requestAnimationFrame(loop);
+
+    return () => {
+      cancelled = true;
+      if (detectionLoopRef.current) {
+        cancelAnimationFrame(detectionLoopRef.current);
+        detectionLoopRef.current = null;
+      }
+    };
+  }, [cameraActive, detectPoseInElement, trackingReady]);
+
+  useEffect(() => {
+    const image = selfieImageRef.current;
+
+    if (!activeSelfieUrl || cameraActive || !image || !trackingReady) {
+      return;
+    }
+
+    const run = async () => {
+      if (!image.complete || image.naturalWidth === 0 || image.naturalHeight === 0) {
+        return;
+      }
+
+      await detectPoseInElement(image, "IMAGE");
+    };
+
+    void run();
+  }, [activeSelfieUrl, cameraActive, detectPoseInElement, trackingReady]);
+
+  useEffect(() => {
+    if (
+      !trackingReady ||
+      !(activeSelfieUrl || cameraActive) ||
+      !faceLockActive ||
+      anchorDiagnostics.score < 0.58 ||
+      renderLookLoading
+    ) {
+      if (autoRenderTimeoutRef.current) {
+        window.clearTimeout(autoRenderTimeoutRef.current);
+      }
+      return;
+    }
+
+    if (lastRenderSignatureRef.current === renderSignature) {
+      return;
+    }
+
+    autoRenderTimeoutRef.current = window.setTimeout(() => {
+      void handleRenderLook("auto");
+    }, AUTO_RENDER_DELAY_MS);
+
+    return () => {
+      if (autoRenderTimeoutRef.current) {
+        window.clearTimeout(autoRenderTimeoutRef.current);
+      }
+    };
+  }, [
+    activeSelfieUrl,
+    anchorDiagnostics.score,
+    cameraActive,
+    faceLockActive,
+    handleRenderLook,
+    renderLookLoading,
+    renderSignature,
+    trackingReady,
+  ]);
+
   const previewModeLabel = cameraActive
-    ? "Live camera feed"
-    : selfieUrl
-      ? "Uploaded portrait preview"
+    ? "Live webcam"
+    : activeSelfieUrl
+      ? "Portrait personalize"
       : "Studio mannequin";
-  const fitLabel = faceProfile?.faceShape
-    ? `${faceProfile.faceShape} fit`
-    : "Editorial fit";
-  const fitReadout = `x${overlay.fit.scale.toFixed(2)} • y ${overlay.fit.offsetY > 0 ? "+" : ""}${overlay.fit.offsetY.toFixed(1)} • h ${(overlay.fit.height * 100).toFixed(0)}% • w ${(overlay.fit.width * 100).toFixed(0)}%`;
-  const anchorDiagnostics = getFaceAnchorDiagnostics(detectedFaceFrame);
-  const anchorScoreLabel = `${Math.round(anchorDiagnostics.score * 100)}%`;
-  const anchorPillClassName =
-    anchorDiagnostics.label === "strong"
-      ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
-      : anchorDiagnostics.label === "steady"
-        ? "border-cyan-400/20 bg-cyan-400/10 text-cyan-200"
-        : "border-amber-400/20 bg-amber-400/10 text-amber-200";
-  const anchorCardClassName =
-    anchorDiagnostics.label === "strong"
-      ? "border-emerald-400/15 bg-emerald-400/[0.06]"
-      : anchorDiagnostics.label === "steady"
-        ? "border-cyan-400/15 bg-cyan-400/[0.06]"
-        : "border-amber-400/15 bg-amber-400/[0.06]";
-  const anchorGuidance =
-    faceLockHolding && anchorDiagnostics.label !== "strong"
-      ? "Holding the last stable face box so the overlay stays demo-ready while the browser reacquires your face."
-      : anchorDiagnostics.guidance;
-  const canRealignFromFaceLock =
-    cameraActive || Boolean(selfieUrl && faceLockAvailable);
-  const faceGuideStyle = displayFaceFrame
+  const trackingLabel = trackingReady
+    ? faceLockActive
+      ? "Landmarks live"
+      : faceLockHolding
+        ? "Landmarks holding"
+        : "Landmarks ready"
+    : trackingError
+      ? "Tracking unavailable"
+      : "Loading landmarks";
+  const presetSummary = `${preset.shortLabel} • ${overlay.texture} • ${overlay.colorName.replace(
+    "-",
+    " "
+  )}`;
+  const faceGuideStyle = displayPoseFrame
     ? {
-        left: `${displayFaceFrame.x}px`,
-        top: `${displayFaceFrame.y}px`,
-        width: `${displayFaceFrame.width}px`,
-        height: `${displayFaceFrame.height}px`,
+        left: `${displayPoseFrame.x}px`,
+        top: `${displayPoseFrame.y}px`,
+        width: `${displayPoseFrame.width}px`,
+        height: `${displayPoseFrame.height}px`,
       }
     : undefined;
-  const crownGuideStyle = displayFaceFrame
-    ? {
-        left: `${displayFaceFrame.x + displayFaceFrame.width * 0.14}px`,
-        top: `${displayFaceFrame.y + displayFaceFrame.height * 0.12}px`,
-        width: `${displayFaceFrame.width * 0.72}px`,
-      }
-    : undefined;
+  const crownGuideStyle =
+    displayPoseFrame && trackedPose
+      ? {
+          left: `${cameraActive ? trackedPose.frame.frameWidth - trackedPose.crownAnchor.x - 32 : trackedPose.crownAnchor.x - 32}px`,
+          top: `${trackedPose.crownAnchor.y - 2}px`,
+          width: "64px",
+        }
+      : undefined;
 
   return (
-    <section className="relative mb-14 overflow-hidden rounded-[2.8rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.12),transparent_24%),linear-gradient(145deg,rgba(7,11,19,0.98),rgba(11,17,30,0.9))] p-5 shadow-[0_40px_140px_rgba(2,8,23,0.5)] md:p-7">
+    <section className="relative mb-10 overflow-hidden rounded-[2.8rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.12),transparent_24%),linear-gradient(145deg,rgba(7,11,19,0.98),rgba(11,17,30,0.9))] p-5 shadow-[0_40px_140px_rgba(2,8,23,0.5)] md:p-7">
       <div className="pointer-events-none absolute -left-16 top-0 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
       <div className="pointer-events-none absolute bottom-0 right-0 h-64 w-64 rounded-full bg-fuchsia-400/10 blur-3xl" />
 
-      <div className="relative grid gap-8 xl:grid-cols-[1.18fr_0.82fr] xl:items-stretch">
+      <div className="relative grid gap-8 xl:grid-cols-[1.16fr_0.84fr] xl:items-start">
         <div className="rounded-[2.3rem] border border-white/10 bg-slate-950/55 p-4 backdrop-blur md:p-5">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200">
                 <Sparkles className="h-3.5 w-3.5" />
-                Live Stylist Studio
+                Live Salon Agent
               </div>
               <h3 className="text-2xl font-medium text-white md:text-3xl">
-                See the mashup before you commit to the cut.
+                See the cut, talk through it, then render it on your face.
               </h3>
             </div>
             <button
@@ -949,32 +1323,30 @@ export default function LiveStyleStudio({
 
           <div className="relative aspect-[4/5] overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top,#18364b_0%,#0a1220_44%,#04070d_100%)]">
             <div ref={previewFrameRef} className="absolute inset-0">
-            {cameraActive ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                muted
-                playsInline
-                className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
-              />
-            ) : previewBackground ? (
-              <Image
-                ref={selfieImageRef}
-                src={selfieUrl ?? ""}
-                alt="Uploaded portrait preview"
-                fill
-                unoptimized
-                sizes="(max-width: 1280px) 100vw, 60vw"
-                className="absolute inset-0 h-full w-full object-cover opacity-95"
-              />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="relative h-[74%] w-[64%] rounded-[45%] border border-white/10 bg-slate-900/60">
-                  <div className="absolute left-1/2 top-[18%] h-[18%] w-[32%] -translate-x-1/2 rounded-full bg-slate-800/90" />
-                  <div className="absolute left-1/2 top-[28%] h-[38%] w-[42%] -translate-x-1/2 rounded-[42%] bg-slate-800/60" />
+              {cameraActive ? (
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
+                />
+              ) : activeSelfieUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  ref={selfieImageRef}
+                  src={activeSelfieUrl}
+                  alt="Portrait preview"
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="relative h-[74%] w-[64%] rounded-[45%] border border-white/10 bg-slate-900/60">
+                    <div className="absolute left-1/2 top-[16%] h-[18%] w-[32%] -translate-x-1/2 rounded-full bg-slate-800/90" />
+                    <div className="absolute left-1/2 top-[28%] h-[38%] w-[42%] -translate-x-1/2 rounded-[42%] bg-slate-800/60" />
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
             </div>
 
             <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-slate-950/30 to-transparent" />
@@ -983,66 +1355,25 @@ export default function LiveStyleStudio({
                 {previewModeLabel}
               </span>
               <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 backdrop-blur">
-                {previewStyle}
+                {preset.label}
               </span>
               <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-200 backdrop-blur">
-                {fitLabel}
+                {trackingLabel}
               </span>
-              {fitAdjusted && (
-                <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200 backdrop-blur">
-                  Precision fit
-                </span>
-              )}
-              <span
-                className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] backdrop-blur ${
-                  faceLockActive
-                    ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
-                    : faceLockHolding
-                      ? "border-amber-400/20 bg-amber-400/10 text-amber-200"
-                    : faceLockAvailable
-                      ? "border-white/10 bg-slate-950/70 text-slate-300"
-                      : "border-white/10 bg-slate-950/70 text-slate-500"
-                }`}
-              >
-                {faceLockActive
-                  ? "Face lock live"
-                  : faceLockHolding
-                    ? "Face lock holding"
-                  : faceLockAvailable
-                    ? "Face lock scanning"
-                    : "Face lock unavailable"}
-              </span>
-              {faceLockAvailable && (
-                <span
-                  className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] backdrop-blur ${anchorPillClassName}`}
-                >
-                  Anchor {anchorDiagnostics.label}
-                </span>
-              )}
             </div>
 
             {faceGuideStyle && (
               <>
                 <div
                   style={faceGuideStyle}
-                  className="pointer-events-none absolute rounded-[42%] border border-emerald-300/45 bg-emerald-300/[0.04] shadow-[0_0_0_1px_rgba(16,185,129,0.12)]"
-                  aria-hidden="true"
+                  className="pointer-events-none absolute rounded-[42%] border border-emerald-300/45 bg-emerald-300/[0.04]"
                 />
-                <div
-                  style={crownGuideStyle}
-                  className="pointer-events-none absolute border-t border-dashed border-cyan-300/60"
-                  aria-hidden="true"
-                />
-                <div
-                  style={{
-                    left: `${displayFaceFrame.x + displayFaceFrame.width * 0.14}px`,
-                    top: `${Math.max(18, displayFaceFrame.y - 22)}px`,
-                  }}
-                  className="pointer-events-none absolute rounded-full border border-cyan-300/25 bg-slate-950/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200 backdrop-blur"
-                  aria-hidden="true"
-                >
-                  Crown anchor
-                </div>
+                {crownGuideStyle && (
+                  <div
+                    style={crownGuideStyle}
+                    className="pointer-events-none absolute border-t border-dashed border-cyan-300/60"
+                  />
+                )}
               </>
             )}
 
@@ -1059,7 +1390,7 @@ export default function LiveStyleStudio({
                 </div>
               </div>
               <div className="rounded-full border border-white/10 bg-slate-950/72 px-4 py-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-300 backdrop-blur">
-                {overlay.texture} texture • {overlay.fringe} fringe
+                {presetSummary}
               </div>
             </div>
           </div>
@@ -1067,39 +1398,26 @@ export default function LiveStyleStudio({
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                Style Base
+                Tracking quality
               </div>
-              <div className="mt-1 text-sm text-white">{previewStyle}</div>
-            </div>
-            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-3">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                Overlay Fit
-              </div>
-              <div className="mt-1 text-sm text-white capitalize">
-                {fitAdjusted
-                  ? `${overlaySourceMode} calibrated + tuned`
-                  : `${overlaySourceMode} calibrated`}
+              <div className="mt-1 text-sm text-white">
+                {anchorDiagnostics.label} • {Math.round(anchorDiagnostics.score * 100)}%
               </div>
             </div>
             <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                Color Direction
+                Makeover level
               </div>
               <div className="mt-1 text-sm text-white capitalize">
-                {overlay.colorName.replace("-", " ")}
+                {makeoverLevel}
               </div>
             </div>
-            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-3 sm:col-span-3">
+            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                Anchor Quality
+                Face notes
               </div>
-              <div className="mt-1 flex flex-wrap items-center gap-3">
-                <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${anchorPillClassName}`}>
-                  {anchorDiagnostics.label}
-                </span>
-                <span className="text-sm text-slate-300">
-                  {anchorDiagnostics.guidance}
-                </span>
+              <div className="mt-1 text-sm text-white capitalize">
+                {faceProfile?.faceShape || "Editorial default"} fit
               </div>
             </div>
           </div>
@@ -1111,32 +1429,16 @@ export default function LiveStyleStudio({
                   Precision fit controls
                 </div>
                 <p className="mt-1 max-w-lg text-sm leading-relaxed text-slate-400">
-                  Fine-tune the overlay live for this face and camera angle. This
-                  sits on top of the automatic calibration so the demo operator
-                  can recover alignment in seconds, even when the browser face
-                  lock lands slightly left, right, high, low, or short through
-                  the fringe and ends.
+                  MediaPipe handles crown, temple, jaw, and head-angle tracking. These controls are just the last-mile polish for the demo.
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300">
-                  {fitReadout}
-                </div>
-                <button
-                  onClick={realignOverlayFromFaceLock}
-                  disabled={!canRealignFromFaceLock}
-                  className="inline-flex h-10 items-center justify-center rounded-full border border-cyan-400/20 bg-cyan-400/10 px-4 text-xs font-medium text-cyan-100 transition-colors hover:border-cyan-300/40 hover:bg-cyan-300/10 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-transparent disabled:text-slate-500"
-                >
-                  Auto align
-                </button>
-                <button
-                  onClick={() => setFitAdjustment(DEFAULT_OVERLAY_ADJUSTMENT)}
-                  disabled={!fitAdjusted}
-                  className="inline-flex h-10 items-center justify-center rounded-full border border-white/10 px-4 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Reset fit
-                </button>
-              </div>
+              <button
+                onClick={() => setFitAdjustment(DEFAULT_OVERLAY_ADJUSTMENT)}
+                disabled={!fitAdjusted}
+                className="inline-flex h-10 items-center justify-center rounded-full border border-white/10 px-4 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Reset fit
+              </button>
             </div>
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -1171,77 +1473,21 @@ export default function LiveStyleStudio({
                 </label>
               ))}
             </div>
-
-            <div
-              className={`mt-4 rounded-[1.4rem] border px-4 py-4 ${anchorCardClassName}`}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300/80">
-                    Face lock quality
-                  </div>
-                  <div className="mt-1 text-sm text-white">
-                    {cameraActive
-                      ? "Live anchor guidance for the mirrored webcam preview."
-                      : selfieUrl
-                        ? "Anchor guidance for the uploaded portrait crop."
-                        : "Turn on the webcam or upload a portrait to anchor the overlay."}
-                  </div>
-                </div>
-                <div
-                  className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] ${anchorPillClassName}`}
-                >
-                  {anchorDiagnostics.label} lock • {anchorScoreLabel}
-                </div>
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-slate-300">
-                {anchorGuidance}
-              </p>
-              <p className="mt-3 text-xs leading-relaxed text-slate-400">
-                {cameraActive
-                  ? "Keep your forehead visible, stay centered for one beat, then use Auto align if the crown guide drifts."
-                  : selfieUrl
-                    ? "Use Auto align once after changing crop size or orientation, then make final slider tweaks only if needed."
-                    : "Without a detectable face box, the studio falls back to editorial heuristics tuned to face shape and hairstyle silhouette."}
-              </p>
-            </div>
           </div>
 
-          {faceProfile && (
-            <p className="mt-4 text-sm text-slate-400">
-              Fit is tuned for a {faceProfile.faceShape} face shape
-              {faceLockActive
-                ? ` and browser face detection is actively anchoring the overlay to the detected face box with ${anchorDiagnostics.label} confidence.`
-                : faceLockHolding
-                  ? " and the last stable face lock is being held briefly so the overlay does not jump during motion."
-                : " with the overlay lifted around the crown for a more believable try-on."}{" "}
-              You can still fine-tune it live when the framing shifts.
-            </p>
-          )}
-
-          {cameraError && (
-            <p className="mt-4 text-sm text-amber-200">{cameraError}</p>
+          {(cameraError || trackingError) && (
+            <div className="mt-4 rounded-[1.4rem] border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+              {cameraError || trackingError}
+            </div>
           )}
         </div>
 
-        <div className="flex flex-col justify-between">
-          <div>
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">
+        <div className="flex flex-col gap-5">
+          <div className="rounded-[2.2rem] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">
               <Volume2 className="h-3.5 w-3.5" />
-              Talk To The Agent
+              Talk To The Stylist
             </div>
-            <h3 className="max-w-md text-2xl font-medium text-white md:text-3xl">
-              Shape the brief out loud like you&apos;re in the chair.
-            </h3>
-            <p className="mt-3 max-w-lg text-sm leading-relaxed text-slate-400">
-              Ask for softness, polish, edge, lower maintenance, or a little
-              more drama. The agent will rebalance the live overlay, remember
-              your last few turns, and speak the strongest stylist-ready mashup
-              back to you.
-            </p>
-          </div>
-
-          <div className="mt-6 rounded-[2.2rem] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
             <div className="flex flex-wrap gap-2">
               {QUICK_PROMPTS.map((prompt) => (
                 <button
@@ -1264,88 +1510,12 @@ export default function LiveStyleStudio({
             <textarea
               value={preferences}
               onChange={(event) => setPreferences(event.target.value)}
-              placeholder="Type or dictate your preferences here..."
+              placeholder="Tell the stylist what you want..."
               readOnly={listening}
-              className="mt-5 min-h-[180px] w-full rounded-[1.8rem] border border-white/10 bg-slate-950/85 p-5 text-sm leading-relaxed text-white outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-400/40 read-only:cursor-default read-only:border-cyan-400/30"
+              className="mt-5 min-h-[156px] w-full rounded-[1.8rem] border border-white/10 bg-slate-950/85 p-5 text-sm leading-relaxed text-white outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-400/40 read-only:cursor-default read-only:border-cyan-400/30"
             />
-            <div className="mt-3 rounded-[1.5rem] border border-white/10 bg-slate-950/55 px-4 py-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                  Spoken preference capture
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <span
-                    className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                      speechRecognitionSupported
-                        ? "border-cyan-400/20 bg-cyan-400/10 text-cyan-200"
-                        : "border-white/10 bg-slate-900/70 text-slate-500"
-                    }`}
-                  >
-                    {speechRecognitionSupported
-                      ? listening
-                        ? "Mic live"
-                        : "Mic ready"
-                      : "Mic unavailable"}
-                  </span>
-                  <span
-                    className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                      speechSynthesisSupported
-                        ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
-                        : "border-white/10 bg-slate-900/70 text-slate-500"
-                    }`}
-                  >
-                    {speechSynthesisSupported ? "Voice ready" : "Voice unavailable"}
-                  </span>
-                </div>
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-slate-300">
-                {listening
-                  ? speechDraft
-                    ? speechDraft
-                    : "Listening for your next phrase..."
-                  : "Typed notes stay in place while final dictated phrases are added to the brief."}
-              </p>
-              <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                {listening
-                  ? "The brief is locked while listening so the live transcript does not overwrite manual edits mid-demo."
-                  : "Start talking to append spoken direction, then edit the combined brief before sending it to the agent."}
-              </p>
-            </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                onClick={() => {
-                  if (speaking) {
-                    stopSpeaking();
-                  }
-
-                  setVoiceReplyEnabled((current) => !current);
-                }}
-                disabled={!speechSynthesisSupported}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {voiceReplyEnabled ? (
-                  <Volume2 className="h-3.5 w-3.5" />
-                ) : (
-                  <VolumeX className="h-3.5 w-3.5" />
-                )}
-                {speechSynthesisSupported
-                  ? voiceReplyEnabled
-                    ? "Voice reply on"
-                    : "Voice reply muted"
-                  : "Voice reply unavailable"}
-              </button>
-              <div className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1.5 text-xs font-medium text-slate-400">
-                Session memory {sessionTurns.length} turns
-              </div>
-              {speaking && (
-                <div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-medium text-emerald-200">
-                  Speaking live response
-                </div>
-              )}
-            </div>
-
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
               <button
                 onClick={toggleListening}
                 className={`inline-flex h-12 items-center justify-center gap-2 rounded-full px-5 text-sm font-medium transition-colors ${
@@ -1363,8 +1533,31 @@ export default function LiveStyleStudio({
                 className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Wand2 className="h-4 w-4" />
-                {agentLoading ? "Crafting mashup..." : "Create live mashup"}
+                {agentLoading ? "Tuning preset..." : "Create live mashup"}
               </button>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                onClick={() => {
+                  if (speaking) {
+                    stopSpeaking();
+                  }
+                  setVoiceReplyEnabled((current) => !current);
+                }}
+                disabled={!speechSynthesisSupported}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {voiceReplyEnabled ? (
+                  <Volume2 className="h-3.5 w-3.5" />
+                ) : (
+                  <VolumeX className="h-3.5 w-3.5" />
+                )}
+                {voiceReplyEnabled ? "Voice reply on" : "Voice reply muted"}
+              </button>
+              <div className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1.5 text-xs font-medium text-slate-400">
+                {speechRecognitionSupported ? "Chrome mic ready" : "Mic best in Chrome"}
+              </div>
             </div>
 
             {voiceError && (
@@ -1372,65 +1565,213 @@ export default function LiveStyleStudio({
                 {voiceError}
               </div>
             )}
-          </div>
 
-          <div className="mt-5 rounded-[2rem] border border-white/10 bg-slate-950/68 p-5 backdrop-blur">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                Stylist Response
-              </div>
-              <div className="flex flex-wrap gap-2">
+            <div className="mt-5 rounded-[1.7rem] border border-white/10 bg-slate-950/65 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Stylist response
+                </div>
                 <button
                   onClick={() => speakReply(agentReply)}
                   disabled={!speechSynthesisSupported || !agentReply.trim()}
                   className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Volume2 className="h-3.5 w-3.5" />
-                  Hear response
+                  Hear it
                 </button>
-                {speaking && (
-                  <button
-                    onClick={stopSpeaking}
-                    className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-rose-400/30 hover:text-rose-200"
-                  >
-                    <VolumeX className="h-3.5 w-3.5" />
-                    Stop voice
-                  </button>
-                )}
               </div>
-            </div>
-            <p className="mt-3 text-sm leading-relaxed text-slate-200">
-              {agentReply}
-            </p>
-            <div className="mt-4 rounded-[1.35rem] border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-relaxed text-slate-400">
-              The agent now keeps the recent conversation in play, so follow-up
-              requests like softer, shorter, or more editorial build on the
-              previous direction instead of resetting the session.
+              <p className="mt-3 text-sm leading-relaxed text-slate-200">
+                {agentReply}
+              </p>
             </div>
           </div>
 
-          <div className="mt-5 overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.12),transparent_28%),linear-gradient(160deg,rgba(9,14,26,0.96),rgba(8,10,18,0.9))] p-5 backdrop-blur">
+          <div className="rounded-[2rem] border border-white/10 bg-slate-950/68 p-5 backdrop-blur">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Hero presets
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                  These are the tracked live looks the agent can actually render well.
+                </p>
+              </div>
+              <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-300">
+                {suggestions.length} live options
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3">
+              {suggestions.map((suggestion) => {
+                const suggestionPresetId =
+                  suggestion.presetId || inferPresetIdFromStyleName(suggestion.name);
+                const active = suggestionPresetId === presetId;
+
+                return (
+                  <button
+                    key={`${suggestionPresetId}-${suggestion.name}`}
+                    type="button"
+                    onClick={() => handlePresetSelect(suggestion.name)}
+                    className={`rounded-[1.6rem] border px-4 py-4 text-left transition-colors ${
+                      active
+                        ? "border-cyan-400/35 bg-cyan-400/10 text-white"
+                        : "border-white/10 bg-white/[0.03] text-slate-200 hover:border-white/20 hover:bg-white/[0.05]"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-sm font-medium">{suggestion.name}</div>
+                      <div className="rounded-full border border-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                        {suggestionPresetId}
+                      </div>
+                    </div>
+                    <div className="mt-2 text-sm leading-relaxed text-slate-400">
+                      {suggestion.reason}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Personalize with portrait
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                  Optional, but it gives Gemini a better face reference for the realistic render and board.
+                </p>
+              </div>
+              <button
+                onClick={() => portraitInputRef.current?.click()}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 px-4 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                Choose portrait
+              </button>
+            </div>
+            <input
+              ref={portraitInputRef}
+              type="file"
+              accept="image/*"
+              onChange={(event) => {
+                const file = event.target.files?.[0] || null;
+                setPortraitFile(file);
+                setPortraitError(null);
+              }}
+              className="hidden"
+            />
+            <div className="mt-4 rounded-[1.5rem] border border-white/10 bg-slate-950/60 px-4 py-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                Session portrait
+              </div>
+              <div className="mt-2 text-sm text-white">
+                {portraitFile?.name || (activeSelfieUrl ? "Portrait already in session" : "No portrait chosen yet")}
+              </div>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  onClick={handlePortraitAnalyze}
+                  disabled={portraitBusy || !portraitFile}
+                  className="inline-flex h-11 items-center justify-center rounded-full bg-white px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {portraitBusy ? "Analyzing..." : "Analyze portrait"}
+                </button>
+              </div>
+              {portraitError && (
+                <div className="mt-4 rounded-[1.3rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                  {portraitError}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.14),transparent_28%),linear-gradient(160deg,rgba(9,14,26,0.96),rgba(8,10,18,0.9))] p-5 backdrop-blur">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-200">
+                  On-Face Render
+                </div>
+                <div className="mt-2 text-lg font-medium text-white">
+                  Realistic makeover preview
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                  The app auto-refreshes this once face tracking is steady, or you can force it manually.
+                </p>
+              </div>
+              <button
+                onClick={() => void handleRenderLook("manual")}
+                disabled={renderLookLoading}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-blue-300 px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-blue-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Sparkles className="h-4 w-4" />
+                {renderLookLoading ? "Rendering..." : "Render on my face"}
+              </button>
+            </div>
+
+            {renderLookError && (
+              <div className="mt-4 rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                {renderLookError}
+              </div>
+            )}
+
+            {renderLook && (
+              <div className="mt-5 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+                <div className="relative min-h-[320px] overflow-hidden rounded-[1.8rem] border border-white/10 bg-slate-950/80">
+                  <Image
+                    src={renderLook.imageDataUrl}
+                    alt={renderLook.title}
+                    fill
+                    unoptimized
+                    sizes="(max-width: 1024px) 100vw, 40vw"
+                    className="object-cover"
+                  />
+                </div>
+                <div className="rounded-[1.8rem] border border-white/10 bg-white/[0.04] p-4">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    Render brief
+                  </div>
+                  <div className="mt-2 text-xl font-medium text-white">
+                    {renderLook.title}
+                  </div>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-300">
+                    {renderLook.brief}
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      onClick={() =>
+                        downloadDataUrl(
+                          renderLook.imageDataUrl,
+                          `${preset.id}-render.png`
+                        )
+                      }
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Save image
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.12),transparent_28%),linear-gradient(160deg,rgba(9,14,26,0.96),rgba(8,10,18,0.9))] p-5 backdrop-blur">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
                   Nano Banana Finish
                 </div>
                 <div className="mt-2 text-lg font-medium text-white">
-                  Generate the stylist-ready board
+                  Final stylist-ready board
                 </div>
-                <p className="mt-2 max-w-lg text-sm leading-relaxed text-slate-400">
-                  This sends the current haircut direction, face notes, and your
-                  portrait reference into Gemini image generation to create the
-                  final beauty board for handoff.
-                </p>
               </div>
               <button
-                onClick={handleGenerateStyleBoard}
+                onClick={() => void handleGenerateStyleBoard()}
                 disabled={styleBoardLoading}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-amber-300 px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Sparkles className="h-4 w-4" />
-                {styleBoardLoading ? "Generating board..." : "Generate style board"}
+                {styleBoardLoading ? "Generating..." : "Generate style board"}
               </button>
             </div>
 
@@ -1442,19 +1783,19 @@ export default function LiveStyleStudio({
 
             {styleBoard && (
               <div className="mt-5 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
-                <div className="relative overflow-hidden rounded-[1.8rem] border border-white/10 bg-slate-950/80">
+                <div className="relative min-h-[320px] overflow-hidden rounded-[1.8rem] border border-white/10 bg-slate-950/80">
                   <Image
                     src={styleBoard.imageDataUrl}
                     alt={styleBoard.title}
                     fill
                     unoptimized
-                    sizes="(max-width: 1024px) 100vw, 42vw"
+                    sizes="(max-width: 1024px) 100vw, 40vw"
                     className="object-cover"
                   />
                 </div>
                 <div className="rounded-[1.8rem] border border-white/10 bg-white/[0.04] p-4">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Generated brief
+                    Board brief
                   </div>
                   <div className="mt-2 text-xl font-medium text-white">
                     {styleBoard.title}
@@ -1462,20 +1803,26 @@ export default function LiveStyleStudio({
                   <p className="mt-2 text-sm leading-relaxed text-slate-300">
                     {styleBoard.brief}
                   </p>
-                  {styleBoard.modelText && (
-                    <p className="mt-4 text-sm leading-relaxed text-slate-400">
-                      {styleBoard.modelText}
-                    </p>
-                  )}
-                  <div className="mt-4 rounded-[1.4rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-xs leading-relaxed text-slate-500">
-                    Model: {styleBoard.model}
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      onClick={() =>
+                        downloadDataUrl(
+                          styleBoard.imageDataUrl,
+                          `${preset.id}-style-board.png`
+                        )
+                      }
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Save board
+                    </button>
                   </div>
                 </div>
               </div>
             )}
           </div>
 
-          <div className="mt-5 rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
+          <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
             <div className="flex items-center justify-between gap-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
                 Session Memory
@@ -1484,7 +1831,6 @@ export default function LiveStyleStudio({
                 Last {Math.min(sessionTurns.length, 6)} turns
               </div>
             </div>
-
             <div className="mt-4 space-y-3">
               {sessionTurns.slice(-4).map((turn, index) => (
                 <div
@@ -1497,9 +1843,7 @@ export default function LiveStyleStudio({
                 >
                   <div
                     className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${
-                      turn.speaker === "user"
-                        ? "text-cyan-200"
-                        : "text-slate-500"
+                      turn.speaker === "user" ? "text-cyan-200" : "text-slate-500"
                     }`}
                   >
                     {turn.speaker === "user" ? "You" : "Stylist"}

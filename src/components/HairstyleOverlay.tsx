@@ -12,118 +12,166 @@ type Props = {
   mirrored?: boolean;
 };
 
-function BobShape({
-  gradientId,
-  glowId,
-  config,
-}: {
-  gradientId: string;
-  glowId: string;
-  config: HairOverlayConfig;
-}) {
-  const fringe =
-    config.fringe === "full"
-      ? "M28 36 C37 31 63 31 72 36 L70 48 C61 43 39 43 30 48 Z"
-      : config.fringe === "curtain"
-        ? "M32 33 C40 41 44 50 45 60 L37 57 C35 47 33 41 28 36 Z M68 33 C60 41 56 50 55 60 L63 57 C65 47 67 41 72 36 Z"
-        : "M35 37 C42 34 58 34 65 37";
+function renderPresetLayers(
+  config: HairOverlayConfig,
+  gradientId: string,
+  shineId: string
+) {
+  const soft = 1 + config.tuning.softness * 0.16;
+  const volume = 1 + config.tuning.crownVolume * 0.18;
+  const wave = 1 + config.tuning.waveBoost * 0.18;
+  const density = 1 + config.tuning.density * 0.1;
+  const fringeDrop = 40 + config.tuning.fringeStrength * 7;
+  const partShift = config.part === "side" ? 8 : 0;
 
-  return (
-    <>
-      <ellipse cx="50" cy="24" rx="26" ry="13" fill={`url(#${glowId})`} opacity="0.36" />
-      <path
-        d="M18 42 C19 17 81 17 82 42 L82 85 C76 100 66 110 50 112 C34 110 24 100 18 85 Z"
-        fill={`url(#${gradientId})`}
-        opacity="0.92"
-      />
-      <path
-        d="M24 42 C28 25 72 25 76 42 C68 54 59 60 50 62 C41 60 32 54 24 42 Z"
-        fill="rgba(255,255,255,0.12)"
-      />
-      <path d={fringe} stroke="rgba(255,255,255,0.18)" strokeWidth="2.2" strokeLinecap="round" fill="none" />
-    </>
-  );
-}
-
-function CurtainShape({
-  gradientId,
-  glowId,
-  config,
-}: {
-  gradientId: string;
-  glowId: string;
-  config: HairOverlayConfig;
-}) {
-  const leftPart = config.part === "side" ? 46 : 50;
-  const rightPart = config.part === "side" ? 60 : 50;
-
-  return (
-    <>
-      <ellipse cx="50" cy="26" rx="30" ry="15" fill={`url(#${glowId})`} opacity="0.34" />
-      <path
-        d={`M18 36 C24 12 44 10 ${leftPart} 26 C40 45 34 78 28 114 C24 124 20 128 14 128 C16 112 18 84 18 36 Z`}
-        fill={`url(#${gradientId})`}
-        opacity="0.9"
-      />
-      <path
-        d={`M82 36 C76 12 56 10 ${rightPart} 26 C60 45 66 78 72 114 C76 124 80 128 86 128 C84 112 82 84 82 36 Z`}
-        fill={`url(#${gradientId})`}
-        opacity="0.9"
-      />
-      <path
-        d="M26 28 C34 18 66 18 74 28 C67 38 61 48 58 58 C54 64 46 64 42 58 C39 48 33 38 26 28 Z"
-        fill="rgba(255,255,255,0.1)"
-      />
-      {config.fringe !== "none" && (
-        <path
-          d="M35 34 C41 44 45 55 45 70 M65 34 C59 44 55 55 55 70"
-          stroke="rgba(255,255,255,0.18)"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-        />
-      )}
-    </>
-  );
-}
-
-function ShagShape({
-  gradientId,
-  glowId,
-  config,
-}: {
-  gradientId: string;
-  glowId: string;
-  config: HairOverlayConfig;
-}) {
-  const volume = config.volume === "high" ? 1 : config.volume === "medium" ? 0.92 : 0.86;
-
-  return (
-    <g transform={`translate(${(1 - volume) * 7} ${(1 - volume) * 10}) scale(${volume})`}>
-      <ellipse cx="50" cy="24" rx="32" ry="16" fill={`url(#${glowId})`} opacity="0.38" />
-      <path
-        d="M14 42 C20 14 80 12 86 42 L78 55 L86 68 L75 78 L82 91 L68 97 L60 114 L48 110 L34 118 L28 101 L16 94 L22 76 L12 63 L20 52 Z"
-        fill={`url(#${gradientId})`}
-        opacity="0.92"
-      />
-      <path
-        d="M26 32 C35 24 65 24 74 32 L69 45 L74 54 L63 57 L58 68 L50 64 L40 70 L36 58 L26 54 L31 44 Z"
-        fill="rgba(255,255,255,0.1)"
-      />
-      {config.fringe !== "none" && (
-        <path
-          d={
-            config.fringe === "full"
-              ? "M28 38 C36 31 64 31 72 38"
-              : "M31 37 C37 42 42 48 44 55 M69 37 C63 42 58 48 56 55"
-          }
-          stroke="rgba(255,255,255,0.18)"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          fill="none"
-        />
-      )}
-    </g>
-  );
+  switch (config.presetId) {
+    case "precision-bob":
+      return (
+        <>
+          <path
+            d="M14 44 C18 18 82 18 86 44 L82 78 C74 104 64 114 50 116 C36 114 26 104 18 78 Z"
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M22 36 C30 24 70 23 78 36 C72 ${52 + partShift * 0.35} 62 61 50 65 C38 61 28 ${52 - partShift * 0.2} 22 36 Z`}
+            fill={`url(#${shineId})`}
+            opacity="0.34"
+          />
+          <path
+            d={`M27 ${fringeDrop - 5} C35 ${fringeDrop - 12} 65 ${fringeDrop - 12} 73 ${fringeDrop - 5} L70 53 C62 49 38 49 30 53 Z`}
+            fill="rgba(255,255,255,0.12)"
+            opacity={config.fringe === "none" ? 0 : 1}
+          />
+        </>
+      );
+    case "soft-lob":
+      return (
+        <>
+          <path
+            d={`M16 38 C20 14 80 13 84 38 L82 98 C72 118 60 130 50 132 C40 130 28 118 18 98 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M24 31 C34 19 66 19 76 31 C70 ${52 + partShift * 0.4} 61 64 50 69 C39 64 30 ${52 - partShift * 0.2} 24 31 Z`}
+            fill={`url(#${shineId})`}
+            opacity="0.28"
+          />
+          <path
+            d={`M28 ${fringeDrop} C36 ${fringeDrop - 5} 40 ${fringeDrop + 6} 42 ${fringeDrop + 16} L34 62 C31 54 29 47 26 ${fringeDrop + 2} Z M72 ${fringeDrop} C64 ${fringeDrop - 5} 60 ${fringeDrop + 6} 58 ${fringeDrop + 16} L66 62 C69 54 71 47 74 ${fringeDrop + 2} Z`}
+            fill="rgba(255,255,255,0.14)"
+            opacity={config.fringe === "none" ? 0.35 : 1}
+          />
+        </>
+      );
+    case "curtain-cloud":
+      return (
+        <>
+          <path
+            d={`M14 36 C18 12 38 8 ${50 - partShift * 0.35} 28 C37 46 32 83 28 128 C22 134 16 136 10 132 C12 116 14 84 14 36 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M86 36 C82 12 62 8 ${50 + partShift * 0.15} 28 C63 46 68 83 72 128 C78 134 84 136 90 132 C88 116 86 84 86 36 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d="M25 27 C34 16 66 16 75 27 C67 37 61 47 58 58 C54 64 46 64 42 58 C39 47 33 37 25 27 Z"
+            fill={`url(#${shineId})`}
+            opacity="0.3"
+          />
+          <path
+            d={`M33 ${fringeDrop - 5} C40 ${fringeDrop + 8} 44 ${fringeDrop + 20} 46 ${fringeDrop + 34} M67 ${fringeDrop - 5} C60 ${fringeDrop + 8} 56 ${fringeDrop + 20} 54 ${fringeDrop + 34}`}
+            stroke="rgba(255,255,255,0.18)"
+            strokeWidth={2.6 * soft}
+            strokeLinecap="round"
+            fill="none"
+            opacity={config.fringe === "none" ? 0.2 : 1}
+          />
+        </>
+      );
+    case "curtain-gloss":
+      return (
+        <>
+          <path
+            d="M16 36 C19 12 39 9 50 28 C37 47 31 86 26 130 C20 135 14 135 10 131 C13 113 14 79 16 36 Z"
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d="M84 36 C81 12 61 9 50 28 C63 47 69 86 74 130 C80 135 86 135 90 131 C87 113 86 79 84 36 Z"
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M24 28 C32 18 68 18 76 28 C69 40 63 52 58 66 C54 71 46 71 42 66 C37 52 31 40 24 28 Z`}
+            fill={`url(#${shineId})`}
+            opacity="0.34"
+          />
+          <path
+            d={`M34 ${fringeDrop - 8} C39 ${fringeDrop + 8} 44 ${fringeDrop + 26} 47 ${fringeDrop + 42} M66 ${fringeDrop - 8} C61 ${fringeDrop + 8} 56 ${fringeDrop + 26} 53 ${fringeDrop + 42}`}
+            stroke="rgba(255,255,255,0.18)"
+            strokeWidth={2.4}
+            strokeLinecap="round"
+            fill="none"
+            opacity={config.fringe === "none" ? 0.3 : 1}
+          />
+        </>
+      );
+    case "modern-shag":
+      return (
+        <g transform={`translate(${(1 - volume) * 4} ${(1 - volume) * 8}) scale(${volume})`}>
+          <path
+            d={`M12 42 C18 12 82 12 88 42 L81 57 L88 72 L76 82 L84 97 L69 101 L62 116 L48 110 L34 120 L28 104 L16 98 L22 80 L10 66 L18 55 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d="M25 33 C35 24 65 24 75 33 L69 45 L74 56 L61 60 L56 72 L48 67 L39 74 L35 61 L25 56 L31 44 Z"
+            fill={`url(#${shineId})`}
+            opacity="0.24"
+          />
+          <path
+            d={`M28 ${fringeDrop - 2} C37 ${fringeDrop - 10} 63 ${fringeDrop - 10} 72 ${fringeDrop - 2}`}
+            stroke="rgba(255,255,255,0.18)"
+            strokeWidth={config.fringe === "full" ? 3.4 : 2.2}
+            strokeLinecap="round"
+            fill="none"
+            opacity={config.fringe === "none" ? 0.25 : 1}
+          />
+        </g>
+      );
+    case "volume-waves":
+      return (
+        <g transform={`translate(${(1 - wave) * 4} ${(1 - wave) * 8}) scale(${wave})`}>
+          <path
+            d={`M14 34 C18 12 38 10 50 30 C35 49 26 86 22 132 C16 138 10 138 8 132 C10 118 11 82 14 34 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M86 34 C82 12 62 10 50 30 C65 49 74 86 78 132 C84 138 90 138 92 132 C90 118 89 82 86 34 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M24 25 C36 16 64 16 76 25 C71 42 65 58 58 74 C54 81 46 81 42 74 C35 58 29 42 24 25 Z`}
+            fill={`url(#${shineId})`}
+            opacity="0.28"
+          />
+          <path
+            d={`M18 62 C28 58 31 82 22 96 C14 107 18 121 27 126 M82 62 C72 58 69 82 78 96 C86 107 82 121 73 126`}
+            stroke="rgba(255,255,255,0.18)"
+            strokeWidth={3.2 * density}
+            strokeLinecap="round"
+            fill="none"
+          />
+        </g>
+      );
+  }
 }
 
 export default function HairstyleOverlay({
@@ -134,56 +182,61 @@ export default function HairstyleOverlay({
 }: Props) {
   const id = useId().replace(/:/g, "");
   const gradientId = `${id}-hair-gradient`;
-  const glowId = `${id}-hair-glow`;
+  const shineId = `${id}-hair-shine`;
+  const shadowId = `${id}-hair-shadow`;
   const palette = getOverlayPalette(config.colorName);
+  const glossStrength = 0.45 + Math.max(0, config.tuning.sleekness) * 0.25;
+  const shadowSpread = 24 + config.tuning.crownVolume * 4;
 
   return (
     <div
       style={{
         width: `${config.fit.width * 100}%`,
         height: `${config.fit.height * 100}%`,
-        top: `calc(6% + ${config.fit.offsetY}px)`,
+        top: `calc(5% + ${config.fit.offsetY}px)`,
         transform: `translateX(${config.fit.offsetX}px) scaleX(${mirrored ? -config.fit.scale : config.fit.scale}) scaleY(${config.fit.scale}) rotate(${config.fit.rotation}deg)`,
         opacity: config.fit.opacity,
       }}
       className={cn(
-        "pointer-events-none absolute inset-x-0 top-[6%] mx-auto transition-[width,height,top,transform,opacity] duration-200 ease-out will-change-transform",
-        compact && "max-h-[78%] max-w-[74%]",
-        !compact && "max-h-[84%] max-w-[82%]",
+        "pointer-events-none absolute inset-x-0 top-[5%] mx-auto transition-[width,height,top,transform,opacity] duration-200 ease-out will-change-transform",
+        compact && "max-h-[82%] max-w-[78%]",
+        !compact && "max-h-[92%] max-w-[86%]",
         className
       )}
     >
       <svg
         viewBox="0 0 100 140"
-        className="h-full w-full drop-shadow-[0_12px_24px_rgba(15,23,42,0.45)]"
+        className="h-full w-full drop-shadow-[0_18px_36px_rgba(15,23,42,0.48)]"
         aria-hidden="true"
       >
         <defs>
           <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor={palette.shine} />
-            <stop offset="45%" stopColor={palette.mid} />
+            <stop offset={`${28 + glossStrength * 18}%`} stopColor={palette.mid} />
             <stop offset="100%" stopColor={palette.base} />
           </linearGradient>
-          <radialGradient id={glowId} cx="50%" cy="45%" r="55%">
-            <stop offset="0%" stopColor={palette.shine} stopOpacity="0.88" />
-            <stop offset="60%" stopColor={palette.mid} stopOpacity="0.24" />
+          <linearGradient id={shineId} x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.58)" />
+            <stop offset="45%" stopColor="rgba(255,255,255,0.18)" />
+            <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+          </linearGradient>
+          <radialGradient id={shadowId} cx="50%" cy="26%" r="62%">
+            <stop offset="0%" stopColor={palette.shadow} stopOpacity="0.52" />
+            <stop offset={`${shadowSpread}%`} stopColor={palette.shadow} stopOpacity="0.16" />
             <stop offset="100%" stopColor={palette.shadow} stopOpacity="0" />
           </radialGradient>
         </defs>
 
-        {config.silhouette === "bob" && (
-          <BobShape gradientId={gradientId} glowId={glowId} config={config} />
-        )}
-        {config.silhouette === "curtain" && (
-          <CurtainShape
-            gradientId={gradientId}
-            glowId={glowId}
-            config={config}
-          />
-        )}
-        {config.silhouette === "shag" && (
-          <ShagShape gradientId={gradientId} glowId={glowId} config={config} />
-        )}
+        <ellipse
+          cx="50"
+          cy="24"
+          rx={28 + config.tuning.crownVolume * 6}
+          ry={13 + config.tuning.crownVolume * 2}
+          fill={`url(#${shadowId})`}
+          opacity={config.layerOpacity.shadow}
+        />
+
+        {renderPresetLayers(config, gradientId, shineId)}
       </svg>
     </div>
   );
