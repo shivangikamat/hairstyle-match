@@ -1,10 +1,11 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import type {
   FaceProfile,
   HairOverlayConfig,
   HairstyleSuggestion,
-  StyleAgentTurn,
   StyleAgentResponse,
+  StyleAgentTurn,
+  StyleBoardResponse,
 } from "./types";
 import {
   buildLivePreferenceContext,
@@ -15,6 +16,14 @@ type GeminiFaceResponse = {
   faceProfile: FaceProfile;
   suggestions: HairstyleSuggestion[];
 };
+
+type InlineImagePayload = {
+  mimeType: string;
+  data: string;
+};
+
+const TEXT_MODEL = "gemini-2.5-flash";
+const IMAGE_MODEL = "gemini-2.5-flash-image";
 
 const DEFAULT_SUGGESTIONS: HairstyleSuggestion[] = [
   {
@@ -71,21 +80,92 @@ const VALID_LENGTHS: HairOverlayConfig["length"][] = [
   "long",
 ];
 
+function getApiKey() {
+  return process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || null;
+}
+
 function getClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getApiKey();
 
   if (!apiKey) {
     console.warn(
-      "GEMINI_API_KEY is not set. Falling back to mock hairstyle suggestions."
+      "No Gemini API key found. Falling back to mock hairstyle responses."
     );
     return null;
   }
 
-  return new GoogleGenerativeAI(apiKey);
+  return new GoogleGenAI({ apiKey });
 }
 
-function isOneOf<T extends string>(value: unknown, items: readonly T[]): value is T {
+function getRequiredClient() {
+  const client = getClient();
+
+  if (!client) {
+    throw new Error("GEMINI_API_KEY is not configured for image generation.");
+  }
+
+  return client;
+}
+
+function isOneOf<T extends string>(
+  value: unknown,
+  items: readonly T[]
+): value is T {
   return typeof value === "string" && items.includes(value as T);
+}
+
+function parseJsonResponse<T>(text: string): T | null {
+  if (!text.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+function toInlineImagePayload(
+  imageBytes?: Buffer | null,
+  mimeType?: string | null
+): InlineImagePayload | null {
+  if (!imageBytes || imageBytes.length === 0 || !mimeType?.startsWith("image/")) {
+    return null;
+  }
+
+  return {
+    data: imageBytes.toString("base64"),
+    mimeType,
+  };
+}
+
+function extractImageFromResponse(response: {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        inlineData?: {
+          data?: string;
+          mimeType?: string;
+        };
+      }>;
+    };
+  }>;
+}) {
+  const parts = response.candidates?.[0]?.content?.parts || [];
+
+  for (const part of parts) {
+    const inlineData = part.inlineData;
+
+    if (inlineData?.data && inlineData.mimeType?.startsWith("image/")) {
+      return {
+        data: inlineData.data,
+        mimeType: inlineData.mimeType,
+      };
+    }
+  }
+
+  return null;
 }
 
 function sanitizeAgentResponse(
@@ -156,6 +236,7 @@ function sanitizeAgentResponse(
       length: isOneOf(overlayCandidate.length, VALID_LENGTHS)
         ? overlayCandidate.length
         : fallback.overlay.length,
+      fit: fallback.overlay.fit,
     },
   };
 }
@@ -173,10 +254,6 @@ export async function analyzeSelfieWithGemini(
     };
   }
 
-  const model = client.getGenerativeModel({
-    model: "gemini-1.5-flash",
-  });
-
   const prompt = `
 You are a world-class hairstylist and face-shape analyst.
 
@@ -184,56 +261,44 @@ Look closely at this selfie and:
 1) Infer the person's face shape, hair texture, and skin tone category.
 2) Recommend 3 specific hairstyles that would be very flattering.
 
-Respond with STRICT JSON that matches this TypeScript type:
-
-type Response = {
-  faceProfile: {
-    faceShape:
-      | "round"
-      | "oval"
-      | "square"
-      | "heart"
-      | "diamond"
-      | "oblong";
-    hairTexture: string; // e.g. "straight", "wavy", "coily"
-    skinTone: string; // e.g. "cool fair", "warm medium", "deep neutral"
-  };
-  suggestions: {
-    name: string;   // concise hairstyle name
-    reason: string; // 1–2 sentence explanation tailored to this face
-  }[];
-};
-
-Return ONLY valid JSON. Do not include markdown, backticks, or any extra text.
+Respond with strict JSON only using this shape:
+{
+  "faceProfile": {
+    "faceShape": "round | oval | square | heart | diamond | oblong",
+    "hairTexture": "string",
+    "skinTone": "string"
+  },
+  "suggestions": [
+    {
+      "name": "string",
+      "reason": "string"
+    }
+  ]
+}
 `.trim();
 
-  const imagePart = {
-    inlineData: {
-      data: imageBytes.toString("base64"),
-      mimeType,
+  const image = toInlineImagePayload(imageBytes, mimeType);
+  const result = await client.models.generateContent({
+    model: TEXT_MODEL,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: prompt },
+          ...(image ? [{ inlineData: image }] : []),
+        ],
+      },
+    ],
+    config: {
+      responseMimeType: "application/json",
+      temperature: 0.4,
     },
-  };
+  });
 
-  const requestParts =
-    imageBytes.length > 0 && mimeType.startsWith("image/")
-      ? [{ text: prompt }, imagePart]
-      : [prompt];
-
-  const result = await model.generateContent(requestParts);
-
-  const text = result.response.text();
-
-  let parsed: GeminiFaceResponse | null = null;
-
-  try {
-    parsed = JSON.parse(text) as GeminiFaceResponse;
-  } catch (error) {
-    console.error("Failed to parse Gemini JSON response:", error, text);
-  }
+  const parsed = parseJsonResponse<GeminiFaceResponse>(result.text || "");
 
   if (
     !parsed ||
-    !parsed.suggestions ||
     !Array.isArray(parsed.suggestions) ||
     parsed.suggestions.length === 0
   ) {
@@ -270,19 +335,13 @@ export async function generateStyleMashupWithGemini(params: {
     return fallback;
   }
 
-  const model = client.getGenerativeModel({
-    model: "gemini-1.5-flash",
-  });
-
   const prompt = `
 You are a live celebrity hair stylist agent for a Gemini hackathon demo.
 
 The user is talking to a webcam preview and wants a hairstyle mashup recommendation.
 You must pick exactly one base style from this available list:
 ${suggestions
-  .map(
-    (suggestion) => `- ${suggestion.name}: ${suggestion.reason}`
-  )
+  .map((suggestion) => `- ${suggestion.name}: ${suggestion.reason}`)
   .join("\n")}
 
 Current selected style: ${currentStyle || "none"}
@@ -304,7 +363,7 @@ ${preferences || "No specific preferences given."}
 Cumulative preference direction:
 ${livePreferenceContext || "No specific preferences given."}
 
-Respond with STRICT JSON only. Use this shape exactly:
+Respond with strict JSON only. Use this shape exactly:
 {
   "selectedStyle": "one of the available style names exactly",
   "mashupName": "short memorable demo name",
@@ -320,15 +379,20 @@ Respond with STRICT JSON only. Use this shape exactly:
     "length": "short" | "medium" | "long"
   }
 }
-
-Keep the output practical for a live overlay preview. Do not include markdown or extra text.
 `.trim();
 
   try {
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
+    const result = await client.models.generateContent({
+      model: TEXT_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.7,
+      },
+    });
+
     return sanitizeAgentResponse(
-      JSON.parse(text),
+      parseJsonResponse(result.text || ""),
       livePreferenceContext,
       suggestions,
       currentStyle,
@@ -338,4 +402,90 @@ Keep the output practical for a live overlay preview. Do not include markdown or
     console.error("Failed to generate style mashup:", error);
     return fallback;
   }
+}
+
+export async function generateStyleBoardWithGemini(params: {
+  selectedStyle: string;
+  mashupName?: string | null;
+  preferences?: string | null;
+  preferencesSummary?: string | null;
+  stylistReply?: string | null;
+  faceProfile?: FaceProfile | null;
+  selfie?: {
+    imageBytes: Buffer;
+    mimeType: string;
+  } | null;
+}): Promise<StyleBoardResponse> {
+  const client = getRequiredClient();
+  const title = params.mashupName?.trim() || params.selectedStyle.trim();
+  const preferenceSummary =
+    params.preferencesSummary?.trim() ||
+    params.preferences?.trim() ||
+    "polished, flattering, salon-ready";
+  const stylistReply =
+    params.stylistReply?.trim() ||
+    `Build an elevated salon board for ${params.selectedStyle}.`;
+  const faceNotes = params.faceProfile
+    ? `${params.faceProfile.faceShape} face shape, ${params.faceProfile.hairTexture} texture, ${params.faceProfile.skinTone} tone.`
+    : "No face profile was supplied.";
+
+  const prompt = `
+Create a polished hairstyle style board image for a salon consultation.
+
+Primary hairstyle: ${params.selectedStyle}
+Board title direction: ${title}
+User preference summary: ${preferenceSummary}
+Stylist brief: ${stylistReply}
+Face and texture notes: ${faceNotes}
+
+Requirements:
+- photorealistic beauty editorial result
+- shoulders-up framing
+- hairstyle is the hero, with clear silhouette and texture
+- luxury salon campaign lighting
+- clean background
+- no text, no watermark, no split panels, no collage
+- keep the look wearable and stylist-ready
+- if a reference selfie is provided, preserve the person's identity while changing only the hairstyle
+`.trim();
+
+  const image = toInlineImagePayload(
+    params.selfie?.imageBytes,
+    params.selfie?.mimeType
+  );
+  const result = await client.models.generateContent({
+    model: IMAGE_MODEL,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: prompt },
+          ...(image ? [{ inlineData: image }] : []),
+        ],
+      },
+    ],
+    config: {
+      responseModalities: [Modality.IMAGE, Modality.TEXT],
+      temperature: 0.8,
+    },
+  });
+
+  const generatedImage = extractImageFromResponse(result);
+
+  if (!generatedImage) {
+    throw new Error(
+      result.text?.trim() ||
+        "Gemini did not return an image for the style board request."
+    );
+  }
+
+  return {
+    imageDataUrl: `data:${generatedImage.mimeType};base64,${generatedImage.data}`,
+    mimeType: generatedImage.mimeType,
+    title,
+    brief: preferenceSummary,
+    prompt,
+    model: IMAGE_MODEL,
+    modelText: result.text?.trim() || "",
+  };
 }

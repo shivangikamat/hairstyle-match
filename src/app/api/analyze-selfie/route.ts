@@ -23,19 +23,22 @@ export async function POST(request: Request) {
       const buffer = Buffer.from(arrayBuffer);
       const mimeType = file.type || "image/jpeg";
 
-      const { suggestions } = await analyzeSelfieWithGemini(buffer, mimeType);
+      const { faceProfile, suggestions } = await analyzeSelfieWithGemini(
+        buffer,
+        mimeType
+      );
 
-      return NextResponse.json({ suggestions });
+      return NextResponse.json({ faceProfile, suggestions });
     }
 
     // Fallback: if called without an image (e.g., from hero button),
     // just delegate to Gemini with no image and return safe defaults.
-    const { suggestions } = await analyzeSelfieWithGemini(
+    const { faceProfile, suggestions } = await analyzeSelfieWithGemini(
       Buffer.from(""),
       "text/plain"
     );
 
-    return NextResponse.json({ suggestions });
+    return NextResponse.json({ faceProfile, suggestions });
   } catch (error) {
     console.error("Error in /api/analyze-selfie:", error);
     return NextResponse.json(

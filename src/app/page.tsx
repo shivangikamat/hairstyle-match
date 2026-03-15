@@ -1,19 +1,42 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { Scissors, Sparkles, MapPin, ChevronRight, Menu } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useRef, useState } from "react";
+import { Scissors, Sparkles, ChevronRight, Menu } from "lucide-react";
+import { motion } from "framer-motion";
 import { LampContainer } from "@/components/ui/lamp";
-import type { HairstyleSuggestion, Salon, SalonSearchResponse } from "@/lib/types";
+import type {
+  FaceProfile,
+  HairstyleSuggestion,
+  Salon,
+  SalonSearchResponse,
+} from "@/lib/types";
 import SelfieUploader from "@/components/SelfieUploader";
 import SalonList from "@/components/SalonList";
 import LiveStyleStudio from "@/components/LiveStyleStudio";
 import HairstyleOverlay from "@/components/HairstyleOverlay";
 import { createOverlayFromStyle } from "@/lib/styleStudio";
 
+const STARTER_SUGGESTIONS: HairstyleSuggestion[] = [
+  {
+    name: "Textured Bob",
+    reason: "A sharp but wearable starter look with clean lines and easy polish.",
+  },
+  {
+    name: "Curtain Layers",
+    reason:
+      "A face-framing option that keeps movement, softness, and length in play.",
+  },
+  {
+    name: "Modern Shag",
+    reason:
+      "A more directional cut with texture and crown lift for instant camera energy.",
+  },
+];
+
 export default function Page() {
   const [suggestions, setSuggestions] = useState<HairstyleSuggestion[]>([]);
   const [selfieUrl, setSelfieUrl] = useState<string | null>(null);
+  const [faceProfile, setFaceProfile] = useState<FaceProfile | null>(null);
   const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
   const [locationQuery, setLocationQuery] = useState("");
   const [salons, setSalons] = useState<Salon[]>([]);
@@ -21,28 +44,30 @@ export default function Page() {
   const [salonError, setSalonError] = useState<string | null>(null);
   const [hasSearchedSalons, setHasSearchedSalons] = useState(false);
 
-  const resultsRef = useRef<HTMLDivElement | null>(null);
+  const studioRef = useRef<HTMLDivElement | null>(null);
   const salonsRef = useRef<HTMLDivElement | null>(null);
+  const activeSuggestions =
+    suggestions.length > 0 ? suggestions : STARTER_SUGGESTIONS;
+  const resolvedSelectedStyle =
+    selectedStyle || activeSuggestions[0]?.name || null;
 
   const handleResults = (payload: {
     suggestions: HairstyleSuggestion[];
     imageUrl: string;
+    faceProfile: FaceProfile | null;
   }) => {
     setSuggestions(payload.suggestions || []);
     setSelfieUrl(payload.imageUrl);
+    setFaceProfile(payload.faceProfile);
     setSelectedStyle(null);
     setSalons([]);
     setSalonError(null);
     setHasSearchedSalons(false);
-
-    if (resultsRef.current) {
-      resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
   };
 
   const handleScrollToUpload = () => {
-    if (resultsRef.current) {
-      resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (studioRef.current) {
+      studioRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   };
 
@@ -61,7 +86,7 @@ export default function Page() {
   };
 
   const handleFindSalons = async () => {
-    if (!selectedStyle) {
+    if (!resolvedSelectedStyle) {
       setSalonError("Choose one of your AI hairstyles first.");
       return;
     }
@@ -77,7 +102,7 @@ export default function Page() {
 
     try {
       const response = await fetch(
-        `/api/salons?style=${encodeURIComponent(selectedStyle)}&location=${encodeURIComponent(
+        `/api/salons?style=${encodeURIComponent(resolvedSelectedStyle)}&location=${encodeURIComponent(
           locationQuery.trim()
         )}`
       );
@@ -157,8 +182,8 @@ export default function Page() {
           transition={{ delay: 0.5, duration: 0.8 }}
           className="mt-6 max-w-2xl text-center text-base md:text-lg text-slate-400 leading-relaxed px-4"
         >
-          Upload your portrait, let our AI analyze your face shape and texture, 
-          and discover tailored hairstyle suggestions that you can take straight to our master stylists.
+          Talk to the stylist immediately, switch on the webcam if you want,
+          then drop in a portrait only when you want more personalized analysis.
         </motion.p>
         
         <motion.div
@@ -183,84 +208,54 @@ export default function Page() {
 
       {/* Content Section */}
       <main className="relative z-10 mx-auto max-w-7xl px-6 py-24 md:px-12 lg:px-24 border-t border-white/5 bg-slate-950">
-
-        {/* Selfie upload + analysis panel – pulled slightly closer to the hero */}
-        <div className="mb-16 -mt-8" ref={resultsRef}>
-          <SelfieUploader onResults={handleResults} />
-        </div>
-
-        <div className="mb-20 grid gap-8 md:grid-cols-3">
-          <div className="group rounded-3xl border border-white/5 bg-white/[0.02] p-8 transition-colors hover:bg-white/[0.04]">
-            <div className="mb-6 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20 transition-transform group-hover:scale-110">
-              <Sparkles className="h-5 w-5" />
-            </div>
-            <h3 className="mb-3 text-lg font-medium text-white">Smart Match</h3>
-            <p className="text-sm leading-relaxed text-slate-400">
-              Styles mathematically tailored to your face shape, bone structure, and texture. No more guessing in the styling chair.
-            </p>
-          </div>
-          
-          <div className="group rounded-3xl border border-white/5 bg-white/[0.02] p-8 transition-colors hover:bg-white/[0.04]">
-            <div className="mb-6 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20 transition-transform group-hover:scale-110">
-              <Scissors className="h-5 w-5" />
-            </div>
-            <h3 className="mb-3 text-lg font-medium text-white">Stylist Ready</h3>
-            <p className="text-sm leading-relaxed text-slate-400">
-              Export professional technical briefs to share with your stylist, ensuring they know the precise cut, angle, and finish required.
-            </p>
-          </div>
-
-          <div className="group rounded-3xl border border-white/5 bg-white/[0.02] p-8 transition-colors hover:bg-white/[0.04]">
-            <div className="mb-6 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20 transition-transform group-hover:scale-110">
-              <MapPin className="h-5 w-5" />
-            </div>
-            <h3 className="mb-3 text-lg font-medium text-white">Premium Salons</h3>
-            <p className="text-sm leading-relaxed text-slate-400">
-              Seamlessly book appointments with curated master stylists in your area who specialize in your matched hair textures.
-            </p>
-          </div>
-        </div>
-
-        <AnimatePresence>
-          {suggestions.length > 0 && (
-            <motion.section 
-              initial={{ opacity: 0, y: 40 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="relative overflow-hidden rounded-[3rem] border border-cyan-500/20 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.08),transparent_24%),linear-gradient(180deg,rgba(8,18,31,0.86),rgba(4,9,17,0.96))] p-8 shadow-2xl shadow-cyan-900/20 md:p-12"
-            >
-              <div className="pointer-events-none absolute -left-16 top-12 h-60 w-60 rounded-full bg-cyan-500/8 blur-3xl" />
-              <div className="pointer-events-none absolute bottom-0 right-0 h-72 w-72 rounded-full bg-fuchsia-500/8 blur-3xl" />
-              <div className="relative">
+        <motion.section
+          initial={{ opacity: 0, y: 40 }}
+          animate={{ opacity: 1, y: 0 }}
+          ref={studioRef}
+          className="relative overflow-hidden rounded-[3rem] border border-cyan-500/20 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.08),transparent_24%),linear-gradient(180deg,rgba(8,18,31,0.86),rgba(4,9,17,0.96))] p-8 shadow-2xl shadow-cyan-900/20 md:p-12"
+        >
+          <div className="pointer-events-none absolute -left-16 top-12 h-60 w-60 rounded-full bg-cyan-500/8 blur-3xl" />
+          <div className="pointer-events-none absolute bottom-0 right-0 h-72 w-72 rounded-full bg-fuchsia-500/8 blur-3xl" />
+          <div className="relative">
               <div className="mb-10 flex flex-col items-start gap-4 md:flex-row md:items-end md:justify-between">
                 <div>
                   <h2 className="text-3xl font-medium tracking-tight text-white mb-2">
-                    Your Live Stylist Session
+                    Your Live Salon Agent
                   </h2>
                   <p className="max-w-2xl text-slate-400">
-                    Start with the live mashup studio, talk your preferences into the agent, then move into the saved looks and salon handoff. Everything stays in one polished flow instead of jumping between tools.
+                    Talk to the stylist from the first second, keep the webcam
+                    on if you want a live framing loop, then add a portrait for
+                    stronger personalization without leaving the main stage.
                   </p>
                 </div>
-                <button className="text-sm font-medium text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
-                  Open stylist brief <ChevronRight className="h-4 w-4" />
-                </button>
+                <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-4 py-2 text-sm font-medium text-cyan-100">
+                  {selfieUrl
+                    ? "Portrait synced into the session"
+                    : "Start with webcam or mannequin mode"}
+                </div>
               </div>
 
               <LiveStyleStudio
-                suggestions={suggestions}
+                faceProfile={faceProfile}
+                suggestions={activeSuggestions}
                 selfieUrl={selfieUrl}
-                selectedStyle={selectedStyle}
+                selectedStyle={resolvedSelectedStyle}
                 onSelectStyle={(styleName) => handleChooseStyle(styleName)}
               />
 
+              <div className="mb-10">
+                <SelfieUploader onResults={handleResults} />
+              </div>
+
               <div className="grid gap-6 md:grid-cols-3">
-                {suggestions.map((style, i) => (
+                {activeSuggestions.map((style, i) => (
                   <motion.article
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ delay: i * 0.1 }}
                     key={style.name}
                     className={`group overflow-hidden rounded-2xl border bg-slate-950/50 transition-colors ${
-                      selectedStyle === style.name
+                      resolvedSelectedStyle === style.name
                         ? "border-cyan-400/60 shadow-[0_0_0_1px_rgba(34,211,238,0.15)]"
                         : "border-white/10 hover:bg-slate-900/80"
                     }`}
@@ -292,7 +287,7 @@ export default function Page() {
                     <div className="p-6">
                       <div className="mb-2 flex items-center justify-between gap-3">
                         <h3 className="text-lg font-medium text-white">{style.name}</h3>
-                        {selectedStyle === style.name && (
+                        {resolvedSelectedStyle === style.name && (
                           <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-200">
                             Selected
                           </span>
@@ -304,12 +299,12 @@ export default function Page() {
                           handleChooseStyle(style.name, { scrollToSalons: true })
                         }
                         className={`mt-6 w-full rounded-xl py-2.5 text-sm font-medium transition-colors ${
-                          selectedStyle === style.name
+                          resolvedSelectedStyle === style.name
                             ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                             : "bg-white/5 text-white hover:bg-white/10"
                         }`}
                       >
-                        {selectedStyle === style.name
+                        {resolvedSelectedStyle === style.name
                           ? "Style selected"
                           : "Use this look"}
                       </button>
@@ -320,7 +315,7 @@ export default function Page() {
 
               <div ref={salonsRef}>
                 <SalonList
-                  selectedStyle={selectedStyle}
+                  selectedStyle={resolvedSelectedStyle}
                   location={locationQuery}
                   onLocationChange={setLocationQuery}
                   onSearch={handleFindSalons}
@@ -330,10 +325,8 @@ export default function Page() {
                   hasSearched={hasSearchedSalons}
                 />
               </div>
-              </div>
-            </motion.section>
-          )}
-        </AnimatePresence>
+          </div>
+        </motion.section>
       </main>
       
       {/* Super minimal footer */}

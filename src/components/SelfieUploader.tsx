@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import type { FaceProfile } from "@/lib/types";
 
 type Suggestion = {
   name: string;
@@ -11,6 +12,7 @@ type Props = {
   onResults?: (payload: {
     suggestions: Suggestion[];
     imageUrl: string;
+    faceProfile: FaceProfile | null;
   }) => void;
 };
 
@@ -53,11 +55,16 @@ export default function SelfieUploader({ onResults }: Props) {
         body: formData,
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as {
+        suggestions?: Suggestion[];
+        faceProfile?: FaceProfile;
+      };
+
       if (previewUrl && data.suggestions) {
         onResults?.({
           suggestions: data.suggestions,
           imageUrl: previewUrl,
+          faceProfile: data.faceProfile || null,
         });
       }
     } catch (error) {

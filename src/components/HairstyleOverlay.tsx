@@ -9,6 +9,7 @@ type Props = {
   config: HairOverlayConfig;
   compact?: boolean;
   className?: string;
+  mirrored?: boolean;
 };
 
 function BobShape({
@@ -129,6 +130,7 @@ export default function HairstyleOverlay({
   config,
   compact = false,
   className,
+  mirrored = false,
 }: Props) {
   const id = useId().replace(/:/g, "");
   const gradientId = `${id}-hair-gradient`;
@@ -137,9 +139,17 @@ export default function HairstyleOverlay({
 
   return (
     <div
+      style={{
+        width: `${config.fit.width * 100}%`,
+        height: `${config.fit.height * 100}%`,
+        top: `calc(6% + ${config.fit.offsetY}px)`,
+        transform: `translateX(${config.fit.offsetX}px) scaleX(${mirrored ? -config.fit.scale : config.fit.scale}) scaleY(${config.fit.scale}) rotate(${config.fit.rotation}deg)`,
+        opacity: config.fit.opacity,
+      }}
       className={cn(
-        "pointer-events-none absolute inset-x-0 top-[6%] mx-auto",
-        compact ? "h-[78%] w-[74%]" : "h-[84%] w-[82%]",
+        "pointer-events-none absolute inset-x-0 top-[6%] mx-auto transition-[width,height,top,transform,opacity] duration-200 ease-out will-change-transform",
+        compact && "max-h-[78%] max-w-[74%]",
+        !compact && "max-h-[84%] max-w-[82%]",
         className
       )}
     >

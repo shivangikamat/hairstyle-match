@@ -1,0 +1,39 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_IMAGE_URI}"
+      - "."
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "${_IMAGE_URI}"
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "${_SERVICE_NAME}"
+      - "--image=${_IMAGE_URI}"
+      - "--region=${_REGION}"
+      - "--platform=managed"
+      - "--allow-unauthenticated"
+      - "--port=3000"
+      - "--cpu=1"
+      - "--memory=1Gi"
+      - "--min-instances=1"
+      - "--max-instances=4"
+      - "--concurrency=20"
+      - "--set-env-vars=GCP_PROJECT=${PROJECT_ID}"
+      - "--set-secrets=GEMINI_API_KEY=gemini-api-key:latest"
+
+images:
+  - "${_IMAGE_URI}"
+
+substitutions:
+  _SERVICE_NAME: "hairmatch-live"
+  _REGION: "asia-southeast1"
+  _IMAGE_URI: "gcr.io/${PROJECT_ID}/hairmatch-live"
