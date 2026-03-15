@@ -28,6 +28,21 @@ type OverlayPalette = {
   shadow: string;
 };
 
+const COLOR_LABELS: Record<HairColorName, string> = {
+  "soft-black": "Soft Black",
+  espresso: "Espresso",
+  chestnut: "Chestnut",
+  copper: "Copper Glow",
+  "golden-blonde": "Golden Blonde",
+};
+
+export const HAIR_COLOR_OPTIONS = (
+  Object.keys(COLOR_LABELS) as HairColorName[]
+).map((color) => ({
+  id: color,
+  label: COLOR_LABELS[color],
+}));
+
 const COLOR_KEYWORDS: Array<{ keywords: string[]; color: HairColorName }> = [
   { keywords: ["black", "inky", "jet"], color: "soft-black" },
   { keywords: ["espresso", "dark brown", "rich brown"], color: "espresso" },
@@ -71,11 +86,17 @@ const PALETTES: Record<HairColorName, OverlayPalette> = {
 
 const PRESET_KEYWORDS: Record<HeroPresetId, string[]> = {
   "precision-bob": ["precision bob", "glass bob", "french bob", "bob"],
+  "italian-bob": ["italian bob", "luxe bob", "bouncy bob", "jaw bob"],
   "soft-lob": ["soft lob", "lob", "collarbone", "sleek medium"],
+  "face-frame-flip": ["face frame flip", "flipped lob", "90s flip", "flip ends"],
   "curtain-cloud": ["curtain cloud", "airy curtain", "soft curtain", "curtain layers"],
   "curtain-gloss": ["curtain gloss", "gloss curtain", "polished curtain", "runway curtain"],
+  "butterfly-blowout": ["butterfly blowout", "butterfly layers", "blowout layers", "butterfly"],
+  "sleek-midi": ["sleek midi", "midi cut", "one length midi", "straight midi"],
   "modern-shag": ["modern shag", "shag", "wolf", "texture shag"],
+  "bixie-air": ["bixie", "airy bixie", "piecey crop", "soft pixie"],
   "volume-waves": ["volume waves", "waves", "blowout", "glam waves"],
+  "ribbon-waves": ["ribbon waves", "ribbon curls", "soft waves", "long waves"],
 };
 
 const PRESET_BASE_FIT: Record<HeroPresetId, HairOverlayFit> = {
@@ -88,6 +109,15 @@ const PRESET_BASE_FIT: Record<HeroPresetId, HairOverlayFit> = {
     rotation: 0,
     opacity: 0.95,
   },
+  "italian-bob": {
+    scale: 1,
+    width: 0.84,
+    height: 0.83,
+    offsetX: 0,
+    offsetY: -5,
+    rotation: 0,
+    opacity: 0.95,
+  },
   "soft-lob": {
     scale: 1,
     width: 0.84,
@@ -96,6 +126,15 @@ const PRESET_BASE_FIT: Record<HeroPresetId, HairOverlayFit> = {
     offsetY: -4,
     rotation: 0,
     opacity: 0.95,
+  },
+  "face-frame-flip": {
+    scale: 1,
+    width: 0.86,
+    height: 0.91,
+    offsetX: 0,
+    offsetY: -4,
+    rotation: 0,
+    opacity: 0.94,
   },
   "curtain-cloud": {
     scale: 1,
@@ -115,6 +154,24 @@ const PRESET_BASE_FIT: Record<HeroPresetId, HairOverlayFit> = {
     rotation: 0,
     opacity: 0.95,
   },
+  "butterfly-blowout": {
+    scale: 1,
+    width: 0.92,
+    height: 1,
+    offsetX: 0,
+    offsetY: -6,
+    rotation: 0,
+    opacity: 0.94,
+  },
+  "sleek-midi": {
+    scale: 1,
+    width: 0.84,
+    height: 0.94,
+    offsetX: 0,
+    offsetY: -6,
+    rotation: 0,
+    opacity: 0.95,
+  },
   "modern-shag": {
     scale: 1,
     width: 0.89,
@@ -124,6 +181,15 @@ const PRESET_BASE_FIT: Record<HeroPresetId, HairOverlayFit> = {
     rotation: 0,
     opacity: 0.93,
   },
+  "bixie-air": {
+    scale: 1,
+    width: 0.8,
+    height: 0.74,
+    offsetX: 0,
+    offsetY: -12,
+    rotation: 0,
+    opacity: 0.94,
+  },
   "volume-waves": {
     scale: 1,
     width: 0.9,
@@ -132,6 +198,15 @@ const PRESET_BASE_FIT: Record<HeroPresetId, HairOverlayFit> = {
     offsetY: -5,
     rotation: 0,
     opacity: 0.93,
+  },
+  "ribbon-waves": {
+    scale: 1,
+    width: 0.89,
+    height: 1.01,
+    offsetX: 0,
+    offsetY: -4,
+    rotation: 0,
+    opacity: 0.94,
   },
 };
 
@@ -174,6 +249,34 @@ export const HERO_PRESETS: Record<HeroPresetId, HeroPresetSpec> = {
       density: [-0.25, 0.35],
     },
   },
+  "italian-bob": {
+    id: "italian-bob",
+    label: "Italian Bob",
+    shortLabel: "Italian Bob",
+    description:
+      "A jaw-skimming luxury bob with bounce through the ends and a plush salon blowout finish.",
+    silhouette: "bob",
+    length: "short",
+    defaultColor: "chestnut",
+    defaultTexture: "glossy",
+    defaultPart: "side",
+    defaultVolume: "medium",
+    defaultFringe: "side-swoop",
+    vibes: ["expensive", "bouncy", "luxe"],
+    salonTags: ["italian bob", "jaw-skimming", "bouncy blowout"],
+    bestFaceShapes: ["oval", "heart", "diamond"],
+    maintenance: "medium",
+    makeoverBias: "signature",
+    tuningLimits: {
+      fringeStrength: [-0.45, 0.55],
+      softness: [-0.2, 0.5],
+      lengthBias: [-0.35, 0.18],
+      crownVolume: [-0.2, 0.45],
+      sleekness: [0.15, 1],
+      waveBoost: [-0.2, 0.35],
+      density: [-0.2, 0.45],
+    },
+  },
   "soft-lob": {
     id: "soft-lob",
     label: "Soft Lob",
@@ -200,6 +303,34 @@ export const HERO_PRESETS: Record<HeroPresetId, HeroPresetSpec> = {
       sleekness: [0, 1],
       waveBoost: [-0.2, 0.55],
       density: [-0.2, 0.4],
+    },
+  },
+  "face-frame-flip": {
+    id: "face-frame-flip",
+    label: "Face-Frame Flip",
+    shortLabel: "Flip Cut",
+    description:
+      "A polished shoulder cut with face-framing lift and a glossy flipped-out finish through the ends.",
+    silhouette: "lob",
+    length: "medium",
+    defaultColor: "chestnut",
+    defaultTexture: "airy",
+    defaultPart: "side",
+    defaultVolume: "medium",
+    defaultFringe: "side-swoop",
+    vibes: ["playful", "lifted", "90s"],
+    salonTags: ["flipped ends", "face framing", "soft bend"],
+    bestFaceShapes: ["oval", "heart", "diamond", "round"],
+    maintenance: "medium",
+    makeoverBias: "signature",
+    tuningLimits: {
+      fringeStrength: [-0.45, 0.55],
+      softness: [0.05, 0.85],
+      lengthBias: [-0.15, 0.4],
+      crownVolume: [-0.1, 0.5],
+      sleekness: [-0.05, 0.7],
+      waveBoost: [0.05, 0.75],
+      density: [-0.15, 0.45],
     },
   },
   "curtain-cloud": {
@@ -258,6 +389,62 @@ export const HERO_PRESETS: Record<HeroPresetId, HeroPresetSpec> = {
       density: [-0.2, 0.35],
     },
   },
+  "butterfly-blowout": {
+    id: "butterfly-blowout",
+    label: "Butterfly Blowout",
+    shortLabel: "Butterfly",
+    description:
+      "Big butterfly layers with airy face-framing pieces, crown lift, and a plush blowout arc.",
+    silhouette: "curtain",
+    length: "long",
+    defaultColor: "chestnut",
+    defaultTexture: "airy",
+    defaultPart: "center",
+    defaultVolume: "high",
+    defaultFringe: "curtain",
+    vibes: ["big blowout", "glam", "layered"],
+    salonTags: ["butterfly layers", "blowout", "face framing"],
+    bestFaceShapes: ["round", "oblong", "heart", "oval"],
+    maintenance: "high",
+    makeoverBias: "editorial",
+    tuningLimits: {
+      fringeStrength: [0.1, 1],
+      softness: [0.2, 1],
+      lengthBias: [-0.15, 0.55],
+      crownVolume: [0.12, 1],
+      sleekness: [-0.15, 0.55],
+      waveBoost: [0.1, 0.85],
+      density: [0.05, 0.7],
+    },
+  },
+  "sleek-midi": {
+    id: "sleek-midi",
+    label: "Sleek Midi Cut",
+    shortLabel: "Midi",
+    description:
+      "A one-length midi cut with luxury shine, razor-clean shape, and a minimal glass finish.",
+    silhouette: "lob",
+    length: "medium",
+    defaultColor: "espresso",
+    defaultTexture: "sleek",
+    defaultPart: "center",
+    defaultVolume: "low",
+    defaultFringe: "none",
+    vibes: ["minimal", "sleek", "luxury"],
+    salonTags: ["one-length", "glass finish", "sleek shape"],
+    bestFaceShapes: ["oval", "oblong", "heart"],
+    maintenance: "medium",
+    makeoverBias: "signature",
+    tuningLimits: {
+      fringeStrength: [-0.75, 0.2],
+      softness: [-0.25, 0.35],
+      lengthBias: [-0.12, 0.3],
+      crownVolume: [-0.45, 0.2],
+      sleekness: [0.35, 1],
+      waveBoost: [-0.45, 0.15],
+      density: [-0.2, 0.28],
+    },
+  },
   "modern-shag": {
     id: "modern-shag",
     label: "Modern Shag",
@@ -286,6 +473,34 @@ export const HERO_PRESETS: Record<HeroPresetId, HeroPresetSpec> = {
       density: [-0.3, 0.55],
     },
   },
+  "bixie-air": {
+    id: "bixie-air",
+    label: "Airy Bixie",
+    shortLabel: "Bixie",
+    description:
+      "A short bixie with lifted crown shape, pieced-out edges, and soft editorial movement.",
+    silhouette: "shag",
+    length: "short",
+    defaultColor: "soft-black",
+    defaultTexture: "piecey",
+    defaultPart: "side",
+    defaultVolume: "medium",
+    defaultFringe: "wispy",
+    vibes: ["cool", "airy", "editorial"],
+    salonTags: ["bixie", "piecey crop", "airy fringe"],
+    bestFaceShapes: ["heart", "oval", "oblong"],
+    maintenance: "medium",
+    makeoverBias: "editorial",
+    tuningLimits: {
+      fringeStrength: [-0.1, 0.9],
+      softness: [-0.15, 0.6],
+      lengthBias: [-0.45, 0.12],
+      crownVolume: [0.05, 0.85],
+      sleekness: [-0.6, 0.25],
+      waveBoost: [-0.2, 0.45],
+      density: [-0.25, 0.45],
+    },
+  },
   "volume-waves": {
     id: "volume-waves",
     label: "Volume Waves",
@@ -312,6 +527,34 @@ export const HERO_PRESETS: Record<HeroPresetId, HeroPresetSpec> = {
       sleekness: [-0.3, 0.5],
       waveBoost: [0.2, 1],
       density: [0, 0.65],
+    },
+  },
+  "ribbon-waves": {
+    id: "ribbon-waves",
+    label: "Ribbon Waves",
+    shortLabel: "Ribbon Waves",
+    description:
+      "Dimensional long waves with soft ribbon bends, glossy lengths, and a romantic salon finish.",
+    silhouette: "waves",
+    length: "long",
+    defaultColor: "chestnut",
+    defaultTexture: "wavy",
+    defaultPart: "center",
+    defaultVolume: "medium",
+    defaultFringe: "none",
+    vibes: ["romantic", "soft", "movement"],
+    salonTags: ["ribbon curls", "soft waves", "dimensional gloss"],
+    bestFaceShapes: ["oval", "round", "heart", "square"],
+    maintenance: "medium",
+    makeoverBias: "signature",
+    tuningLimits: {
+      fringeStrength: [-0.8, 0.4],
+      softness: [0.25, 1],
+      lengthBias: [0.1, 0.6],
+      crownVolume: [-0.05, 0.65],
+      sleekness: [-0.15, 0.55],
+      waveBoost: [0.3, 1],
+      density: [-0.05, 0.5],
     },
   },
 };
@@ -366,6 +609,10 @@ export function getOverlayPalette(colorName: HairColorName): OverlayPalette {
   return PALETTES[colorName];
 }
 
+export function getColorLabel(colorName: HairColorName) {
+  return COLOR_LABELS[colorName];
+}
+
 function inferColor(preferences: string) {
   const normalized = normalizeText(preferences);
   const matched = COLOR_KEYWORDS.find(({ keywords }) =>
@@ -415,8 +662,30 @@ export function inferPresetIdFromStyleName(
     }
   }
 
+  if (includesAny(normalized, ["italian", "jaw bob", "luxe bob", "bouncy bob"])) {
+    return "italian-bob";
+  }
+
+  if (includesAny(normalized, ["bixie", "soft pixie", "piecey crop", "crop"])) {
+    return "bixie-air";
+  }
+
+  if (includesAny(normalized, ["butterfly", "blowout layers", "big layers"])) {
+    return "butterfly-blowout";
+  }
+
+  if (includesAny(normalized, ["midi", "one length", "straight cut", "sleek cut"])) {
+    return "sleek-midi";
+  }
+
+  if (includesAny(normalized, ["flip", "flipped", "90s", "ends out"])) {
+    return "face-frame-flip";
+  }
+
   if (includesAny(normalized, ["wave", "blowout", "glam"])) {
-    return "volume-waves";
+    return includesAny(normalized, ["soft", "romantic", "ribbon"])
+      ? "ribbon-waves"
+      : "volume-waves";
   }
 
   if (includesAny(normalized, ["shag", "texture", "edgy"])) {
@@ -437,11 +706,18 @@ export function inferPresetIdFromStyleName(
 }
 
 function detectFringe(preset: HeroPresetSpec, tuning: PresetTuning): HairFringe {
-  if (preset.id === "volume-waves" && tuning.fringeStrength < -0.2) {
+  if (
+    (preset.id === "volume-waves" || preset.id === "ribbon-waves") &&
+    tuning.fringeStrength < -0.2
+  ) {
     return "none";
   }
 
-  if (preset.id === "soft-lob") {
+  if (
+    preset.id === "soft-lob" ||
+    preset.id === "italian-bob" ||
+    preset.id === "face-frame-flip"
+  ) {
     return tuning.fringeStrength > 0.15 ? "side-swoop" : "none";
   }
 
@@ -449,8 +725,12 @@ function detectFringe(preset: HeroPresetSpec, tuning: PresetTuning): HairFringe 
     return tuning.fringeStrength > 0.2 ? "curtain" : "wispy";
   }
 
-  if (preset.id === "modern-shag") {
+  if (preset.id === "modern-shag" || preset.id === "bixie-air") {
     return tuning.fringeStrength > 0.45 ? "full" : "wispy";
+  }
+
+  if (preset.id === "sleek-midi") {
+    return tuning.fringeStrength > 0.1 ? "wispy" : "none";
   }
 
   if (tuning.fringeStrength > 0.55) {
@@ -461,12 +741,24 @@ function detectFringe(preset: HeroPresetSpec, tuning: PresetTuning): HairFringe 
 }
 
 function detectTexture(preset: HeroPresetSpec, tuning: PresetTuning): HairTextureMode {
-  if (preset.id === "modern-shag") {
+  if (preset.id === "modern-shag" || preset.id === "bixie-air") {
     return tuning.softness > 0.2 ? "airy" : "piecey";
   }
 
-  if (preset.id === "volume-waves") {
+  if (preset.id === "volume-waves" || preset.id === "ribbon-waves") {
     return tuning.waveBoost > 0.5 ? "wavy" : "airy";
+  }
+
+  if (preset.id === "italian-bob") {
+    return tuning.waveBoost > 0.2 ? "airy" : "glossy";
+  }
+
+  if (preset.id === "face-frame-flip" || preset.id === "butterfly-blowout") {
+    return tuning.waveBoost > 0.3 ? "wavy" : "airy";
+  }
+
+  if (preset.id === "sleek-midi") {
+    return tuning.sleekness > 0.6 ? "glossy" : "sleek";
   }
 
   if (tuning.sleekness > 0.65) {
@@ -532,6 +824,12 @@ function buildBaseTuning(preset: HeroPresetSpec): PresetTuning {
     waveBoost:
       preset.defaultTexture === "wavy"
         ? 0.7
+        : preset.id === "butterfly-blowout"
+          ? 0.42
+          : preset.id === "face-frame-flip"
+            ? 0.34
+            : preset.id === "italian-bob"
+              ? 0.14
         : preset.id === "soft-lob"
           ? 0.18
           : 0,
@@ -1057,7 +1355,8 @@ export function buildLivePreferenceContext(
 function scorePresetMatch(
   suggestion: HairstyleSuggestion,
   preferences: string,
-  currentStyle?: string | null
+  currentStyle?: string | null,
+  faceProfile?: FaceProfile | null
 ) {
   const presetId =
     suggestion.presetId || inferPresetIdFromStyleName(suggestion.name, preferences);
@@ -1081,13 +1380,48 @@ function scorePresetMatch(
     score += 4;
   }
 
+  if (
+    faceProfile?.faceShape &&
+    preset.bestFaceShapes.includes(normalizeText(faceProfile.faceShape))
+  ) {
+    score += 3;
+  }
+
   if (presetId === "precision-bob" && includesAny(normalized, ["short", "polished", "clean"])) {
+    score += 4;
+  }
+
+  if (
+    presetId === "italian-bob" &&
+    includesAny(normalized, ["expensive", "bouncy", "jaw", "luxury"])
+  ) {
     score += 4;
   }
 
   if (
     presetId === "curtain-cloud" &&
     includesAny(normalized, ["soft", "face framing", "romantic", "long"])
+  ) {
+    score += 4;
+  }
+
+  if (
+    presetId === "face-frame-flip" &&
+    includesAny(normalized, ["flip", "90s", "playful", "lifted"])
+  ) {
+    score += 4;
+  }
+
+  if (
+    presetId === "butterfly-blowout" &&
+    includesAny(normalized, ["butterfly", "blowout", "big", "layered"])
+  ) {
+    score += 4;
+  }
+
+  if (
+    presetId === "sleek-midi" &&
+    includesAny(normalized, ["minimal", "straight", "sleek", "clean"])
   ) {
     score += 4;
   }
@@ -1100,8 +1434,22 @@ function scorePresetMatch(
   }
 
   if (
+    presetId === "bixie-air" &&
+    includesAny(normalized, ["crop", "bixie", "short", "editorial"])
+  ) {
+    score += 4;
+  }
+
+  if (
     presetId === "volume-waves" &&
     includesAny(normalized, ["waves", "glam", "big", "blowout"])
+  ) {
+    score += 4;
+  }
+
+  if (
+    presetId === "ribbon-waves" &&
+    includesAny(normalized, ["soft waves", "romantic", "ribbon", "gloss"])
   ) {
     score += 4;
   }
@@ -1141,7 +1489,8 @@ export function createFallbackStyleAgentResponse(
   preferences: string,
   suggestions: HairstyleSuggestion[],
   currentStyle?: string | null,
-  conversationHistory: StyleAgentTurn[] = []
+  conversationHistory: StyleAgentTurn[] = [],
+  faceProfile?: FaceProfile | null
 ): StyleAgentResponse {
   const effectivePreferences = buildLivePreferenceContext(
     preferences,
@@ -1154,7 +1503,12 @@ export function createFallbackStyleAgentResponse(
     safeSuggestions
       .map((suggestion) => ({
         suggestion,
-        score: scorePresetMatch(suggestion, effectivePreferences, currentStyle),
+        score: scorePresetMatch(
+          suggestion,
+          effectivePreferences,
+          currentStyle,
+          faceProfile
+        ),
       }))
       .sort((a, b) => b.score - a.score)[0]?.suggestion || safeSuggestions[0];
   const presetId =
@@ -1176,6 +1530,44 @@ export function createFallbackStyleAgentResponse(
     makeoverLevel,
     overlay,
   };
+}
+
+export function getPresetRecommendations(params: {
+  suggestions?: HairstyleSuggestion[];
+  preferences?: string;
+  currentStyle?: string | null;
+  faceProfile?: FaceProfile | null;
+  limit?: number;
+}) {
+  const {
+    suggestions = HERO_PRESET_SUGGESTIONS,
+    preferences = "",
+    currentStyle,
+    faceProfile,
+    limit = 4,
+  } = params;
+  const deduped = Array.from(
+    new Map(
+      suggestions.map((suggestion) => [
+        suggestion.presetId || inferPresetIdFromStyleName(suggestion.name, preferences),
+        suggestion,
+      ])
+    ).values()
+  );
+
+  return deduped
+    .map((suggestion) => ({
+      suggestion,
+      score: scorePresetMatch(
+        suggestion,
+        preferences,
+        currentStyle,
+        faceProfile
+      ),
+    }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit)
+    .map(({ suggestion }) => suggestion);
 }
 
 export function buildPresetCatalogPrompt() {
@@ -1255,6 +1647,7 @@ Requirements:
 - preserve the person's identity and facial features
 - change the hairstyle only
 - realistic salon-quality hairline and crown placement
+- use a dimensional salon color melt or soft gradient finish in the chosen tone, never flat box-dye color
 - premium beauty editorial lighting
 - shoulders-up framing
 - no text, no collage, no split screen, no watermark
@@ -1302,6 +1695,7 @@ Requirements:
 - one finished look only, not a collage
 - shoulders-up framing with clean negative space
 - hairstyle silhouette and texture must read clearly
+- the color direction should feel dimensional and expensive, with salon-grade tonal variation instead of a flat fill
 - preserve the person's identity if a reference portrait is supplied
 - no text, no watermark
 `.trim();

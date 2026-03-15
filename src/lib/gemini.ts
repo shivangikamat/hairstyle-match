@@ -39,8 +39,13 @@ type GeminiImageInput = {
   mimeType: string;
 } | null;
 
-const TEXT_MODEL = "gemini-2.5-flash";
-const IMAGE_MODEL = "gemini-2.5-flash-image";
+const PRIMARY_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-2.5-pro";
+const FALLBACK_TEXT_MODEL =
+  process.env.GEMINI_TEXT_MODEL_FALLBACK || "gemini-2.5-flash";
+const PRIMARY_IMAGE_MODEL =
+  process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image-preview";
+const FALLBACK_IMAGE_MODEL =
+  process.env.GEMINI_IMAGE_MODEL_FALLBACK || "gemini-2.5-flash-image";
 
 const DEFAULT_FACE_PROFILE: FaceProfile = {
   faceShape: "oval",
@@ -129,6 +134,38 @@ function extractImageFromResponse(response: {
   }
 
   return null;
+}
+
+async function generateTextContentWithFallback(params: {
+  client: GoogleGenAI;
+  request: Omit<Parameters<GoogleGenAI["models"]["generateContent"]>[0], "model">;
+}) {
+  try {
+    return {
+      model: PRIMARY_TEXT_MODEL,
+      result: await params.client.models.generateContent({
+        model: PRIMARY_TEXT_MODEL,
+        ...params.request,
+      }),
+    };
+  } catch (primaryError) {
+    if (FALLBACK_TEXT_MODEL === PRIMARY_TEXT_MODEL) {
+      throw primaryError;
+    }
+
+    console.warn(
+      `Primary Gemini text model failed (${PRIMARY_TEXT_MODEL}). Falling back to ${FALLBACK_TEXT_MODEL}.`,
+      primaryError
+    );
+
+    return {
+      model: FALLBACK_TEXT_MODEL,
+      result: await params.client.models.generateContent({
+        model: FALLBACK_TEXT_MODEL,
+        ...params.request,
+      }),
+    };
+  }
 }
 
 function isPresetId(value: unknown): value is HeroPresetId {
@@ -320,23 +357,37 @@ async function generateImagePayload(params: {
     params.selfie?.imageBytes,
     params.selfie?.mimeType
   );
-  const result = await client.models.generateContent({
-    model: IMAGE_MODEL,
+  const request = {
     contents: [
       {
-        role: "user",
-        parts: [
-          { text: params.prompt },
-          ...(image ? [{ inlineData: image }] : []),
-        ],
+        role: "user" as const,
+        parts: [{ text: params.prompt }, ...(image ? [{ inlineData: image }] : [])],
       },
     ],
     config: {
       responseModalities: [Modality.IMAGE, Modality.TEXT],
       temperature: 0.8,
     },
+  };
+
+  let model = PRIMARY_IMAGE_MODEL;
+  let result = await client.models.generateContent({
+    model,
+    ...request,
   });
-  const generatedImage = extractImageFromResponse(result);
+  let generatedImage = extractImageFromResponse(result);
+
+  if (!generatedImage && FALLBACK_IMAGE_MODEL !== PRIMARY_IMAGE_MODEL) {
+    console.warn(
+      `Primary Gemini image model returned no image (${PRIMARY_IMAGE_MODEL}). Falling back to ${FALLBACK_IMAGE_MODEL}.`
+    );
+    model = FALLBACK_IMAGE_MODEL;
+    result = await client.models.generateContent({
+      model,
+      ...request,
+    });
+    generatedImage = extractImageFromResponse(result);
+  }
 
   if (!generatedImage) {
     throw new Error(
@@ -350,7 +401,7 @@ async function generateImagePayload(params: {
     mimeType: generatedImage.mimeType,
     title: params.title,
     prompt: params.prompt,
-    model: IMAGE_MODEL,
+    model,
     modelText: result.text?.trim() || "",
     presetId: params.presetId,
     presetLabel: params.presetLabel,
@@ -399,20 +450,19 @@ Respond with strict JSON only:
 `.trim();
 
   const image = toInlineImagePayload(imageBytes, mimeType);
-  const result = await client.models.generateContent({
-    model: TEXT_MODEL,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: prompt },
-          ...(image ? [{ inlineData: image }] : []),
-        ],
+  const { result } = await generateTextContentWithFallback({
+    client,
+    request: {
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }, ...(image ? [{ inlineData: image }] : [])],
+        },
+      ],
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.35,
       },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      temperature: 0.35,
     },
   });
 
@@ -507,12 +557,14 @@ Rules:
 `.trim();
 
   try {
-    const result = await client.models.generateContent({
-      model: TEXT_MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.65,
+    const { result } = await generateTextContentWithFallback({
+      client,
+      request: {
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.65,
+        },
       },
     });
 

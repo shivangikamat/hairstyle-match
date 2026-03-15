@@ -36,11 +36,17 @@ export type SalonSearchResponse = {
 
 export type HeroPresetId =
   | "precision-bob"
+  | "italian-bob"
   | "soft-lob"
+  | "face-frame-flip"
   | "curtain-cloud"
   | "curtain-gloss"
+  | "butterfly-blowout"
+  | "sleek-midi"
   | "modern-shag"
-  | "volume-waves";
+  | "bixie-air"
+  | "volume-waves"
+  | "ribbon-waves";
 
 export type MakeoverLevel = "subtle" | "signature" | "editorial";
 

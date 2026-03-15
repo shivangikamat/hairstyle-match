@@ -11,6 +11,8 @@ import {
 } from "react";
 import {
   Camera,
+  ChevronDown,
+  ChevronUp,
   Download,
   Mic,
   MicOff,
@@ -21,13 +23,16 @@ import {
   VolumeX,
   Wand2,
 } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import type {
   FaceProfile,
+  HairColorName,
   HairstyleSuggestion,
   MakeoverLevel,
   OverlayAdjustment,
   PresetTuning,
   RenderLookResponse,
+  Salon,
   StyleAgentResponse,
   StyleAgentTurn,
   StyleBoardResponse,
@@ -35,17 +40,23 @@ import type {
 } from "@/lib/types";
 import {
   DEFAULT_OVERLAY_ADJUSTMENT,
+  HAIR_COLOR_OPTIONS,
   applyOverlayAdjustment,
   calibrateOverlayToFace,
   calibrateOverlayToTrackedPose,
   createOverlayFromPreset,
   getFaceAnchorDiagnostics,
+  getColorLabel,
   getHeroPreset,
+  getOverlayPalette,
+  getPresetRecommendations,
+  HERO_PRESET_SUGGESTIONS,
   inferPresetIdFromStyleName,
   normalizePresetTuning,
   smoothTrackedFacePose,
 } from "@/lib/styleStudio";
 import HairstyleOverlay from "./HairstyleOverlay";
+import SalonList from "./SalonList";
 
 type RunningMode = "IMAGE" | "VIDEO";
 
@@ -89,6 +100,13 @@ type Props = {
     imageUrl: string;
     faceProfile: FaceProfile | null;
   }) => void;
+  location: string;
+  onLocationChange: (value: string) => void;
+  onFindSalons: () => void;
+  salonLoading: boolean;
+  salonError: string | null;
+  salons: Salon[];
+  hasSearchedSalons: boolean;
 };
 
 type FaceLandmarkerLike = {
@@ -104,6 +122,9 @@ type FaceLandmarkerLike = {
   };
   close?: () => void;
 };
+
+type WorkspaceTab = "agent" | "portrait" | "render" | "handoff";
+type VoiceProvider = "browser" | "elevenlabs";
 
 const QUICK_PROMPTS = [
   "Soft and face-framing, but still polished on camera.",
@@ -344,6 +365,13 @@ export default function LiveStyleStudio({
   selectedStyle,
   onSelectStyle,
   onPortraitAnalyzed,
+  location,
+  onLocationChange,
+  onFindSalons,
+  salonLoading,
+  salonError,
+  salons,
+  hasSearchedSalons,
 }: Props) {
   const previewFrameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -363,6 +391,7 @@ export default function LiveStyleStudio({
   const lastRenderAtRef = useRef(0);
   const lastRenderSignatureRef = useRef("");
   const autoRenderTimeoutRef = useRef<number | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const initialPresetId = inferPresetIdFromStyleName(
     selectedStyle || suggestions[0]?.name
@@ -412,6 +441,13 @@ export default function LiveStyleStudio({
   const [sessionTurns, setSessionTurns] = useState<StyleAgentTurn[]>([
     { speaker: "agent", text: INITIAL_AGENT_REPLY },
   ]);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("agent");
+  const [enteredSalon, setEnteredSalon] = useState(false);
+  const [mirrorMode, setMirrorMode] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(true);
+  const [showFitControls, setShowFitControls] = useState(false);
+  const [voiceProvider, setVoiceProvider] = useState<VoiceProvider>("browser");
+  const [elevenLabsReady, setElevenLabsReady] = useState(false);
 
   const activeSelfieUrl = draftPortraitUrl || selfieUrl;
   const preset = getHeroPreset(presetId);
@@ -582,7 +618,14 @@ export default function LiveStyleStudio({
   }, [activeSelfieUrl, cameraActive]);
 
   const stopSpeaking = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeaking(false);
       return;
     }
 
@@ -590,34 +633,89 @@ export default function LiveStyleStudio({
     setSpeaking(false);
   }, []);
 
-  const speakReply = useCallback((text: string) => {
-    if (
-      typeof window === "undefined" ||
-      !("speechSynthesis" in window) ||
-      !text.trim()
-    ) {
-      return;
-    }
+  const speakReply = useCallback(
+    async (text: string) => {
+      if (!text.trim()) {
+        return;
+      }
 
-    const synth = window.speechSynthesis;
-    const utterance = new SpeechSynthesisUtterance(text);
-    const preferredVoice = synth
-      .getVoices()
-      .find((voice) => voice.lang.toLowerCase().startsWith("en"));
+      stopSpeaking();
 
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
-    }
+      if (voiceProvider === "elevenlabs") {
+        try {
+          const response = await fetch("/api/voice/stylist", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text }),
+          });
+          const data = (await response.json()) as
+            | { audioDataUrl: string; provider: "elevenlabs" }
+            | { error?: string };
 
-    utterance.rate = 0.97;
-    utterance.pitch = 1.02;
-    utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = () => setSpeaking(false);
+          if (!response.ok || !("audioDataUrl" in data)) {
+            throw new Error(
+              "error" in data
+                ? data.error
+                : "ElevenLabs could not speak the stylist reply."
+            );
+          }
 
-    synth.cancel();
-    synth.speak(utterance);
-  }, []);
+          const audio = new Audio(data.audioDataUrl);
+          audioRef.current = audio;
+          audio.onplay = () => setSpeaking(true);
+          audio.onended = () => {
+            setSpeaking(false);
+            audioRef.current = null;
+          };
+          audio.onerror = () => {
+            setSpeaking(false);
+            audioRef.current = null;
+          };
+
+          await audio.play();
+          return;
+        } catch (error) {
+          console.error("ElevenLabs playback failed, falling back:", error);
+          setVoiceError(
+            error instanceof Error
+              ? `${error.message} Falling back to browser voice.`
+              : "ElevenLabs voice failed. Falling back to browser voice."
+          );
+          setVoiceProvider("browser");
+          setElevenLabsReady(false);
+        }
+      }
+
+      if (
+        typeof window === "undefined" ||
+        !("speechSynthesis" in window)
+      ) {
+        return;
+      }
+
+      const synth = window.speechSynthesis;
+      const utterance = new SpeechSynthesisUtterance(text);
+      const preferredVoice = synth
+        .getVoices()
+        .find((voice) => voice.lang.toLowerCase().startsWith("en"));
+
+      if (preferredVoice) {
+        utterance.voice = preferredVoice;
+      }
+
+      utterance.rate = 0.97;
+      utterance.pitch = 1.02;
+      utterance.onstart = () => setSpeaking(true);
+      utterance.onend = () => setSpeaking(false);
+      utterance.onerror = () => setSpeaking(false);
+
+      synth.cancel();
+      synth.speak(utterance);
+    },
+    [stopSpeaking, voiceProvider]
+  );
 
   const handleRenderLook = useCallback(
     async (mode: "manual" | "auto") => {
@@ -669,6 +767,9 @@ export default function LiveStyleStudio({
         setRenderLook(data);
         lastRenderAtRef.current = Date.now();
         lastRenderSignatureRef.current = renderSignature;
+        if (mode === "manual") {
+          setActiveTab("render");
+        }
       } catch (error) {
         setRenderLookError(
           error instanceof Error
@@ -737,6 +838,7 @@ export default function LiveStyleStudio({
       }
 
       setStyleBoard(data);
+      setActiveTab("handoff");
     } catch (error) {
       setStyleBoardError(
         error instanceof Error
@@ -773,9 +875,21 @@ export default function LiveStyleStudio({
       onSelectStyle(nextPreset.label);
       setRenderLook(null);
       setStyleBoard(null);
+      setActiveTab("agent");
     },
     [onSelectStyle]
   );
+
+  const handleColorSelect = useCallback((colorName: HairColorName) => {
+    setTuning((current) =>
+      normalizePresetTuning(presetId, {
+        ...current,
+        colorDirection: colorName,
+      })
+    );
+    setRenderLook(null);
+    setStyleBoard(null);
+  }, [presetId]);
 
   const handleAgentSubmit = useCallback(async () => {
     const composedPreferences = listening
@@ -847,9 +961,10 @@ export default function LiveStyleStudio({
         });
       });
       onSelectStyle(data.selectedStyle);
+      setActiveTab("render");
 
       if (voiceReplyEnabled && speechSynthesisSupported) {
-        speakReply(data.agentReply);
+        void speakReply(data.agentReply);
       }
     } catch (error) {
       setVoiceError(
@@ -908,6 +1023,7 @@ export default function LiveStyleStudio({
       });
       setRenderLook(null);
       setStyleBoard(null);
+      setActiveTab("agent");
     } catch (error) {
       setPortraitError(
         error instanceof Error
@@ -960,6 +1076,48 @@ export default function LiveStyleStudio({
     setCameraActive(false);
     setFaceLockHolding(false);
   }, []);
+
+  const handleMirrorActivate = useCallback(async () => {
+    setEnteredSalon(true);
+    setMirrorMode(true);
+    setDrawerOpen(true);
+    setActiveTab("agent");
+
+    if (!cameraActive) {
+      await startCamera();
+    }
+  }, [cameraActive, startCamera]);
+
+  const handleSalonHotspot = useCallback(
+    async (destination: "mirror" | "agent" | "looks" | "portrait") => {
+      setEnteredSalon(true);
+
+      if (destination === "mirror") {
+        setMirrorMode(true);
+        setDrawerOpen(true);
+        setActiveTab("agent");
+        if (!cameraActive) {
+          await startCamera();
+        }
+        return;
+      }
+
+      if (destination === "looks") {
+        setDrawerOpen(true);
+        setActiveTab("agent");
+        return;
+      }
+
+      if (destination === "portrait") {
+        setActiveTab("portrait");
+        portraitInputRef.current?.click();
+        return;
+      }
+
+      setActiveTab("agent");
+    },
+    [cameraActive, startCamera]
+  );
 
   const toggleListening = useCallback(() => {
     if (listening) {
@@ -1052,6 +1210,42 @@ export default function LiveStyleStudio({
     setSpeechSynthesisSupported(
       typeof window !== "undefined" && "speechSynthesis" in window
     );
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadVoiceProvider = async () => {
+      try {
+        const response = await fetch("/api/voice/stylist", {
+          cache: "no-store",
+        });
+        const data = (await response.json()) as {
+          configured?: boolean;
+          provider?: VoiceProvider;
+        };
+
+        if (cancelled) {
+          return;
+        }
+
+        if (response.ok && data.configured && data.provider === "elevenlabs") {
+          setVoiceProvider("elevenlabs");
+          setElevenLabsReady(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setVoiceProvider("browser");
+          setElevenLabsReady(false);
+        }
+      }
+    };
+
+    void loadVoiceProvider();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -1278,6 +1472,30 @@ export default function LiveStyleStudio({
     "-",
     " "
   )}`;
+  const presetLibrary = useMemo(() => {
+    const merged = [...suggestions, ...HERO_PRESET_SUGGESTIONS];
+
+    return Array.from(
+      new Map(
+        merged.map((suggestion) => [
+          suggestion.presetId || inferPresetIdFromStyleName(suggestion.name),
+          suggestion,
+        ])
+      ).values()
+    );
+  }, [suggestions]);
+  const recommendedPresets = useMemo(
+    () =>
+      getPresetRecommendations({
+        suggestions: presetLibrary,
+        preferences,
+        currentStyle: preset.label,
+        faceProfile,
+        limit: 4,
+      }),
+    [faceProfile, preferences, preset.label, presetLibrary]
+  );
+  const activePalette = getOverlayPalette(overlay.colorName);
   const faceGuideStyle = displayPoseFrame
     ? {
         left: `${displayPoseFrame.x}px`,
@@ -1294,108 +1512,432 @@ export default function LiveStyleStudio({
           width: "64px",
         }
       : undefined;
+  const voicePlaybackReady =
+    voiceProvider === "elevenlabs" || speechSynthesisSupported;
+  const workspaceTabs: Array<{ id: WorkspaceTab; label: string }> = [
+    { id: "agent", label: "Agent" },
+    { id: "portrait", label: "Portrait" },
+    { id: "render", label: "Render" },
+    { id: "handoff", label: "Handoff" },
+  ];
+  const liveActionLabel = cameraActive
+    ? "Mirror live"
+    : activeSelfieUrl
+      ? "Portrait loaded"
+      : "Start webcam";
 
   return (
-    <section className="relative mb-10 overflow-hidden rounded-[2.8rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.12),transparent_24%),linear-gradient(145deg,rgba(7,11,19,0.98),rgba(11,17,30,0.9))] p-5 shadow-[0_40px_140px_rgba(2,8,23,0.5)] md:p-7">
-      <div className="pointer-events-none absolute -left-16 top-0 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
-      <div className="pointer-events-none absolute bottom-0 right-0 h-64 w-64 rounded-full bg-fuchsia-400/10 blur-3xl" />
+    <section className="relative mb-10 overflow-hidden rounded-[3rem] border border-[#f8c9b8]/35 bg-[linear-gradient(180deg,#50255c_0%,#8a5d78_16%,#dfab9f_16.5%,#dfab9f_68%,#72518a_100%)] p-4 shadow-[0_40px_140px_rgba(51,16,48,0.28)] md:p-6">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-[linear-gradient(180deg,rgba(44,18,56,0.96),rgba(44,18,56,0.36))]" />
+      <div className="pointer-events-none absolute -left-12 bottom-10 h-44 w-44 rounded-full bg-[#74b368]/20 blur-3xl" />
+      <div className="pointer-events-none absolute right-4 top-20 h-56 w-56 rounded-full bg-[#6ab5c1]/16 blur-3xl" />
 
-      <div className="relative grid gap-8 xl:grid-cols-[1.16fr_0.84fr] xl:items-start">
-        <div className="rounded-[2.3rem] border border-white/10 bg-slate-950/55 p-4 backdrop-blur md:p-5">
+      <div className="relative grid gap-6 xl:grid-cols-[1.36fr_0.64fr] xl:items-start">
+        <div className="rounded-[2.4rem] border border-white/15 bg-[linear-gradient(180deg,rgba(72,28,79,0.62),rgba(26,10,33,0.28))] p-4 backdrop-blur md:p-5 xl:sticky xl:top-24">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200">
                 <Sparkles className="h-3.5 w-3.5" />
-                Live Salon Agent
+                Enter The Salon
               </div>
               <h3 className="text-2xl font-medium text-white md:text-3xl">
-                See the cut, talk through it, then render it on your face.
+                Walk into the dressing room, sit at the mirror, and try on looks live.
               </h3>
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/70">
+                The mirror opens the webcam consult, the stylist shelf opens the live agent, and the bottom drawer lets you audition cuts without leaving the room.
+              </p>
             </div>
-            <button
-              onClick={cameraActive ? stopCamera : startCamera}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-white/10 px-4 text-sm font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
-            >
-              {cameraActive ? <Camera className="h-4 w-4" /> : <Video className="h-4 w-4" />}
-              {cameraActive ? "Stop webcam" : "Use webcam"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => {
+                  setMirrorMode((current) => !current);
+                  setDrawerOpen(true);
+                }}
+                className={`inline-flex h-11 items-center justify-center gap-2 rounded-full border px-4 text-sm font-medium transition-colors ${
+                  mirrorMode
+                    ? "border-fuchsia-400/35 bg-fuchsia-400/12 text-fuchsia-100"
+                    : "border-white/10 text-white hover:border-fuchsia-400/25 hover:text-fuchsia-100"
+                }`}
+              >
+                <Sparkles className="h-4 w-4" />
+                {mirrorMode ? "Mirror mode on" : "Mirror mode"}
+              </button>
+              <button
+                onClick={cameraActive ? stopCamera : startCamera}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-white/10 px-4 text-sm font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+              >
+                {cameraActive ? <Camera className="h-4 w-4" /> : <Video className="h-4 w-4" />}
+                {cameraActive ? "Stop webcam" : "Use webcam"}
+              </button>
+            </div>
           </div>
 
-          <div className="relative aspect-[4/5] overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top,#18364b_0%,#0a1220_44%,#04070d_100%)]">
-            <div ref={previewFrameRef} className="absolute inset-0">
-              {cameraActive ? (
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  muted
-                  playsInline
-                  className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
-                />
-              ) : activeSelfieUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  ref={selfieImageRef}
-                  src={activeSelfieUrl}
-                  alt="Portrait preview"
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="relative h-[74%] w-[64%] rounded-[45%] border border-white/10 bg-slate-900/60">
-                    <div className="absolute left-1/2 top-[16%] h-[18%] w-[32%] -translate-x-1/2 rounded-full bg-slate-800/90" />
-                    <div className="absolute left-1/2 top-[28%] h-[38%] w-[42%] -translate-x-1/2 rounded-[42%] bg-slate-800/60" />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-slate-950/30 to-transparent" />
-            <div className="absolute left-5 top-5 flex flex-wrap gap-2">
-              <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-200 backdrop-blur">
-                {previewModeLabel}
-              </span>
-              <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 backdrop-blur">
-                {preset.label}
-              </span>
-              <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-200 backdrop-blur">
-                {trackingLabel}
-              </span>
-            </div>
-
-            {faceGuideStyle && (
+          <div
+            className={`relative overflow-hidden rounded-[2.2rem] border border-white/10 transition-all duration-500 ${
+              mirrorMode
+                ? "aspect-[4/5] bg-[linear-gradient(180deg,#3d213f_0%,#9d6b79_24%,#deaf9e_24.5%,#deaf9e_67%,#6c4e84_100%)]"
+                : "aspect-[4/5] bg-[radial-gradient(circle_at_top,#18364b_0%,#0a1220_44%,#04070d_100%)]"
+            }`}
+          >
+            {mirrorMode && (
               <>
-                <div
-                  style={faceGuideStyle}
-                  className="pointer-events-none absolute rounded-[42%] border border-emerald-300/45 bg-emerald-300/[0.04]"
-                />
-                {crownGuideStyle && (
+                <div className="absolute inset-x-0 top-0 h-20 bg-[linear-gradient(180deg,rgba(47,20,61,0.92),rgba(47,20,61,0.45))]" />
+                <div className="absolute inset-x-0 top-0 h-10 bg-[linear-gradient(90deg,transparent,rgba(205,230,219,0.18),transparent)] opacity-70" />
+                {[18, 48, 78].map((left) => (
                   <div
-                    style={crownGuideStyle}
-                    className="pointer-events-none absolute border-t border-dashed border-cyan-300/60"
-                  />
-                )}
+                    key={left}
+                    className="absolute top-0 h-24 w-14 -translate-x-1/2"
+                    style={{ left: `${left}%` }}
+                  >
+                    <div className="mx-auto h-10 w-[2px] bg-white/30" />
+                    <div className="mx-auto h-10 w-10 rounded-b-[1.4rem] bg-[linear-gradient(180deg,#7e2d74,#4b1d59)] shadow-[0_10px_30px_rgba(0,0,0,0.35)]" />
+                    <div className="mx-auto mt-2 h-2 w-10 rounded-full bg-yellow-100/55 blur-sm" />
+                  </div>
+                ))}
+                <div className="absolute left-4 top-[23%] h-[34%] w-[15%] rounded-[1.6rem] border border-[#4c7b86]/60 bg-[#315563]/75 shadow-[0_18px_40px_rgba(5,10,16,0.3)]" />
+                <div className="absolute right-4 top-[18%] h-[42%] w-[17%] rounded-[1.6rem] border border-[#5c7a77]/55 bg-[#6d8676]/70 shadow-[0_18px_40px_rgba(5,10,16,0.26)]" />
+                <div className="absolute left-[7%] bottom-[11%] h-20 w-20 rounded-[1.6rem] bg-[#cc8e52]/50 blur-[1px]" />
+                <div className="absolute left-[12%] bottom-[18%] h-20 w-12 rounded-t-full rounded-b-[1.3rem] bg-[#5f9f57]/80 blur-[0.5px]" />
+                <div className="absolute left-[16%] bottom-[18%] h-24 w-10 rounded-t-full rounded-b-[1.3rem] bg-[#6eaf62]/80 blur-[0.5px]" />
+                <div className="absolute right-[8%] bottom-[13%] h-16 w-16 rounded-[1.4rem] bg-[#d37b63]/55" />
               </>
             )}
 
-            <HairstyleOverlay config={previewOverlay} mirrored={cameraActive} />
+            <button
+              type="button"
+              onClick={() => void handleSalonHotspot("looks")}
+              className="absolute left-4 top-[34%] z-10 rounded-full border border-white/15 bg-slate-950/72 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/90 backdrop-blur transition-colors hover:border-cyan-300/35 hover:text-cyan-100"
+            >
+              Look wall
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSalonHotspot("agent")}
+              className="absolute right-4 top-[26%] z-10 rounded-full border border-white/15 bg-slate-950/72 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/90 backdrop-blur transition-colors hover:border-fuchsia-300/35 hover:text-fuchsia-100"
+            >
+              Meet stylist
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSalonHotspot("portrait")}
+              className="absolute right-8 bottom-[14%] z-10 rounded-full border border-white/15 bg-slate-950/72 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/90 backdrop-blur transition-colors hover:border-amber-300/35 hover:text-amber-100"
+            >
+              Add portrait
+            </button>
 
-            <div className="absolute inset-x-4 bottom-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-              <div className="max-w-sm rounded-[1.75rem] border border-white/10 bg-slate-950/78 px-4 py-3 backdrop-blur">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
-                  Agent Mashup
+            <div
+              className={`absolute inset-x-[12%] top-[11%] bottom-[18%] overflow-hidden rounded-[2.6rem_2.6rem_1.9rem_1.9rem] border p-3 shadow-[0_30px_80px_rgba(4,9,17,0.45)] ${
+                mirrorMode
+                  ? "border-[#d0b06a]/70 bg-[linear-gradient(180deg,rgba(248,226,188,0.25),rgba(113,70,30,0.24))]"
+                  : "border-white/10 bg-slate-950/35"
+              }`}
+            >
+              <div
+                className="absolute inset-0 opacity-70"
+                style={{
+                  background: `radial-gradient(circle at 20% 18%, ${activePalette.shine}22, transparent 24%), radial-gradient(circle at 78% 16%, ${activePalette.mid}1a, transparent 26%)`,
+                }}
+              />
+              <div
+                ref={previewFrameRef}
+                className={`relative h-full overflow-hidden rounded-[2rem] ${
+                  mirrorMode
+                    ? "bg-[radial-gradient(circle_at_top,rgba(67,118,133,0.26),rgba(17,27,39,0.94)_38%,rgba(4,9,17,1)_100%)]"
+                    : "bg-[radial-gradient(circle_at_top,#18364b_0%,#0a1220_44%,#04070d_100%)]"
+                }`}
+              >
+                {cameraActive ? (
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
+                  />
+                ) : activeSelfieUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    ref={selfieImageRef}
+                    src={activeSelfieUrl}
+                    alt="Portrait preview"
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center px-8">
+                    <div className="relative flex h-full w-full items-center justify-center">
+                      <div className="relative h-[72%] w-[62%] rounded-[45%] border border-white/10 bg-slate-900/58">
+                        <div className="absolute left-1/2 top-[16%] h-[18%] w-[32%] -translate-x-1/2 rounded-full bg-slate-800/90" />
+                        <div className="absolute left-1/2 top-[28%] h-[38%] w-[42%] -translate-x-1/2 rounded-[42%] bg-slate-800/60" />
+                      </div>
+                      <div className="absolute inset-x-0 bottom-10 flex flex-col items-center gap-3">
+                        <button
+                          onClick={() => void handleMirrorActivate()}
+                          className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-6 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100"
+                        >
+                          <Video className="h-4 w-4" />
+                          Open mirror consult
+                        </button>
+                        <button
+                          onClick={() => {
+                            setActiveTab("portrait");
+                            portraitInputRef.current?.click();
+                          }}
+                          className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 px-5 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          Add portrait instead
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!enteredSalon && (
+                  <div className="absolute inset-0 z-[1] flex items-end justify-center bg-[radial-gradient(circle_at_center,transparent_34%,rgba(5,8,15,0.52)_78%,rgba(5,8,15,0.76)_100%)] p-6">
+                    <button
+                      type="button"
+                      onClick={() => void handleMirrorActivate()}
+                      className="rounded-[1.9rem] border border-white/15 bg-slate-950/78 px-6 py-5 text-center text-white shadow-[0_18px_40px_rgba(2,8,23,0.35)] backdrop-blur transition-transform hover:-translate-y-0.5"
+                    >
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200">
+                        Tap The Mirror
+                      </div>
+                      <div className="mt-2 text-lg font-medium">
+                        Start the live stylist consult
+                      </div>
+                      <div className="mt-2 max-w-xs text-sm leading-relaxed text-slate-300">
+                        Your webcam opens in the mirror, the drawer rises from the floor, and the agent joins the session.
+                      </div>
+                    </button>
+                  </div>
+                )}
+
+                <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-slate-950/30 to-transparent" />
+                <div className="absolute left-5 top-5 flex flex-wrap gap-2">
+                  <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-200 backdrop-blur">
+                    {previewModeLabel}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 backdrop-blur">
+                    {preset.label}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-200 backdrop-blur">
+                    {trackingLabel}
+                  </span>
                 </div>
-                <div className="mt-1 text-xl font-medium text-white">{mashupName}</div>
-                <div className="mt-1 text-sm leading-relaxed text-slate-400">
-                  {agentSummary}
+
+                <div className="absolute right-5 top-5 max-w-[230px] rounded-[1.4rem] border border-white/10 bg-slate-950/76 px-4 py-3 text-right backdrop-blur">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-fuchsia-200">
+                    Stylist live
+                  </div>
+                  <div className="mt-1 text-sm font-medium text-white">{liveActionLabel}</div>
+                  <div className="mt-1 text-xs leading-relaxed text-slate-400">
+                    Talk, audition looks, then let the render sharpen once the frame locks.
+                  </div>
+                </div>
+
+                {faceGuideStyle && (
+                  <>
+                    <div
+                      style={faceGuideStyle}
+                      className="pointer-events-none absolute rounded-[42%] border border-emerald-300/45 bg-emerald-300/[0.04]"
+                    />
+                    {crownGuideStyle && (
+                      <div
+                        style={crownGuideStyle}
+                        className="pointer-events-none absolute border-t border-dashed border-cyan-300/60"
+                      />
+                    )}
+                  </>
+                )}
+
+                <HairstyleOverlay config={previewOverlay} mirrored={cameraActive} />
+
+                <div className="absolute left-4 top-auto bottom-24 max-w-sm rounded-[1.75rem] border border-white/10 bg-slate-950/78 px-4 py-3 backdrop-blur">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+                    Agent Mashup
+                  </div>
+                  <div className="mt-1 text-xl font-medium text-white">{mashupName}</div>
+                  <div className="mt-1 text-sm leading-relaxed text-slate-400">
+                    {agentSummary}
+                  </div>
+                </div>
+
+                <div className="absolute right-4 bottom-24 rounded-full border border-white/10 bg-slate-950/72 px-4 py-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-300 backdrop-blur">
+                  {presetSummary}
                 </div>
               </div>
-              <div className="rounded-full border border-white/10 bg-slate-950/72 px-4 py-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-300 backdrop-blur">
-                {presetSummary}
+            </div>
+
+            <div className="absolute inset-x-4 bottom-4 z-20">
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setDrawerOpen((current) => !current)}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-5 text-sm font-medium text-white backdrop-blur transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                >
+                  {drawerOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+                  Style drawer
+                </button>
               </div>
+
+              <AnimatePresence initial={false}>
+                {drawerOpen && (
+                  <motion.div
+                    initial={{ y: 120, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: 120, opacity: 0 }}
+                    transition={{ type: "spring", stiffness: 260, damping: 24 }}
+                    className="mt-3 overflow-hidden rounded-[2rem] border border-white/10 bg-slate-950/88 p-4 shadow-[0_24px_80px_rgba(2,8,23,0.5)] backdrop-blur"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-200">
+                          Mirror Drawer
+                        </div>
+                        <p className="mt-1 text-sm leading-relaxed text-slate-400">
+                          Tap a look, shift the color melt, and keep talking while the preview updates.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => void handleRenderLook("manual")}
+                          disabled={renderLookLoading}
+                          className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-cyan-300 px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Sparkles className="h-3.5 w-3.5" />
+                          {renderLookLoading ? "Rendering..." : "Render"}
+                        </button>
+                        <button
+                          onClick={() => setActiveTab("agent")}
+                          className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 px-4 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                        >
+                          <Wand2 className="h-3.5 w-3.5" />
+                          Talk to agent
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-4">
+                      <div>
+                        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Agent picks
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {recommendedPresets.map((suggestion) => {
+                            const suggestionPresetId =
+                              suggestion.presetId || inferPresetIdFromStyleName(suggestion.name);
+                            const active = suggestionPresetId === presetId;
+
+                            return (
+                              <button
+                                key={`recommended-${suggestionPresetId}`}
+                                type="button"
+                                onClick={() => handlePresetSelect(suggestion.name)}
+                                className={`rounded-[1.4rem] border px-4 py-3 text-left transition-colors ${
+                                  active
+                                    ? "border-cyan-400/35 bg-cyan-400/10 text-white"
+                                    : "border-white/10 bg-white/[0.03] text-slate-200 hover:border-white/20 hover:bg-white/[0.05]"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="text-sm font-medium">{suggestion.name}</div>
+                                  <div className="rounded-full bg-white/5 px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-slate-400">
+                                    pick
+                                  </div>
+                                </div>
+                                <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                                  {suggestion.reason}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Full style rail
+                        </div>
+                        <div className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-2">
+                          {presetLibrary.map((suggestion) => {
+                            const suggestionPresetId =
+                              suggestion.presetId || inferPresetIdFromStyleName(suggestion.name);
+                            const suggestionPreset = getHeroPreset(suggestionPresetId);
+                            const active = suggestionPresetId === presetId;
+
+                            return (
+                              <button
+                                key={`${suggestionPresetId}-rail`}
+                                type="button"
+                                onClick={() => handlePresetSelect(suggestion.name)}
+                                className={`min-w-[190px] snap-start rounded-[1.5rem] border px-4 py-3 text-left transition-colors ${
+                                  active
+                                    ? "border-fuchsia-400/35 bg-fuchsia-400/10 text-white"
+                                    : "border-white/10 bg-white/[0.03] text-slate-200 hover:border-white/20 hover:bg-white/[0.05]"
+                                }`}
+                              >
+                                <div className="text-sm font-medium">{suggestionPreset.label}</div>
+                                <div className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">
+                                  {suggestionPreset.length} • {suggestionPreset.maintenance}
+                                </div>
+                                <div className="mt-3 flex flex-wrap gap-1.5">
+                                  {suggestionPreset.vibes.slice(0, 2).map((vibe) => (
+                                    <span
+                                      key={`${suggestionPresetId}-${vibe}`}
+                                      className="rounded-full border border-white/10 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-slate-400"
+                                    >
+                                      {vibe}
+                                    </span>
+                                  ))}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Color melt
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-5">
+                          {HAIR_COLOR_OPTIONS.map((color) => {
+                            const palette = getOverlayPalette(color.id);
+                            const active = tuning.colorDirection === color.id;
+
+                            return (
+                              <button
+                                key={color.id}
+                                type="button"
+                                onClick={() => handleColorSelect(color.id)}
+                                className={`rounded-[1.2rem] border px-3 py-3 text-left transition-colors ${
+                                  active
+                                    ? "border-cyan-400/35 bg-cyan-400/10"
+                                    : "border-white/10 bg-white/[0.03] hover:border-white/20"
+                                }`}
+                              >
+                                <div
+                                  className="h-10 rounded-[0.9rem]"
+                                  style={{
+                                    background: `linear-gradient(135deg, ${palette.shine}, ${palette.mid} 48%, ${palette.base} 100%)`,
+                                  }}
+                                />
+                                <div className="mt-2 text-xs font-medium text-white">
+                                  {getColorLabel(color.id)}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="mt-4 grid gap-3 sm:grid-cols-4">
             <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
                 Tracking quality
@@ -1420,6 +1962,12 @@ export default function LiveStyleStudio({
                 {faceProfile?.faceShape || "Editorial default"} fit
               </div>
             </div>
+            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                Color melt
+              </div>
+              <div className="mt-1 text-sm text-white">{getColorLabel(tuning.colorDirection)}</div>
+            </div>
           </div>
 
           <div className="mt-4 rounded-[1.8rem] border border-white/10 bg-white/[0.04] p-4">
@@ -1429,50 +1977,70 @@ export default function LiveStyleStudio({
                   Precision fit controls
                 </div>
                 <p className="mt-1 max-w-lg text-sm leading-relaxed text-slate-400">
-                  MediaPipe handles crown, temple, jaw, and head-angle tracking. These controls are just the last-mile polish for the demo.
+                  MediaPipe handles crown, temple, jaw, and head-angle tracking. Open this only when you want the last-mile polish.
                 </p>
               </div>
-              <button
-                onClick={() => setFitAdjustment(DEFAULT_OVERLAY_ADJUSTMENT)}
-                disabled={!fitAdjusted}
-                className="inline-flex h-10 items-center justify-center rounded-full border border-white/10 px-4 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Reset fit
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setShowFitControls((current) => !current)}
+                  className="inline-flex h-10 items-center justify-center rounded-full border border-white/10 px-4 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                >
+                  {showFitControls ? "Hide fit controls" : "Fine-tune fit"}
+                </button>
+                <button
+                  onClick={() => setFitAdjustment(DEFAULT_OVERLAY_ADJUSTMENT)}
+                  disabled={!fitAdjusted}
+                  className="inline-flex h-10 items-center justify-center rounded-full border border-white/10 px-4 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Reset fit
+                </button>
+              </div>
             </div>
 
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              {FIT_CONTROLS.map((control) => (
-                <label
-                  key={control.key}
-                  className="rounded-[1.4rem] border border-white/10 bg-slate-950/60 px-4 py-3"
+            <AnimatePresence initial={false}>
+              {showFitControls && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.22, ease: "easeOut" }}
+                  className="overflow-hidden"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-white">
-                      {control.label}
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      {fitAdjustment[control.key].toFixed(control.step < 0.1 ? 2 : 1)}
-                    </span>
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    {FIT_CONTROLS.map((control) => (
+                      <label
+                        key={control.key}
+                        className="rounded-[1.4rem] border border-white/10 bg-slate-950/60 px-4 py-3"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm font-medium text-white">
+                            {control.label}
+                          </span>
+                          <span className="text-xs text-slate-400">
+                            {fitAdjustment[control.key].toFixed(control.step < 0.1 ? 2 : 1)}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={control.min}
+                          max={control.max}
+                          step={control.step}
+                          value={fitAdjustment[control.key]}
+                          onChange={(event) => {
+                            const nextValue = Number(event.target.value);
+                            setFitAdjustment((current) => ({
+                              ...current,
+                              [control.key]: nextValue,
+                            }));
+                          }}
+                          className="mt-3 h-2 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-cyan-300"
+                        />
+                      </label>
+                    ))}
                   </div>
-                  <input
-                    type="range"
-                    min={control.min}
-                    max={control.max}
-                    step={control.step}
-                    value={fitAdjustment[control.key]}
-                    onChange={(event) => {
-                      const nextValue = Number(event.target.value);
-                      setFitAdjustment((current) => ({
-                        ...current,
-                        [control.key]: nextValue,
-                      }));
-                    }}
-                    className="mt-3 h-2 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-cyan-300"
-                  />
-                </label>
-              ))}
-            </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           {(cameraError || trackingError) && (
@@ -1482,377 +2050,619 @@ export default function LiveStyleStudio({
           )}
         </div>
 
-        <div className="flex flex-col gap-5">
-          <div className="rounded-[2.2rem] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
-            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">
-              <Volume2 className="h-3.5 w-3.5" />
-              Talk To The Stylist
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {QUICK_PROMPTS.map((prompt) => (
-                <button
-                  key={prompt}
-                  onClick={() => {
-                    if (listening) {
-                      recognitionRef.current?.stop();
-                      setListening(false);
-                      setSpeechDraft("");
-                    }
-                    setPreferences(prompt);
-                  }}
-                  className="rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
-
-            <textarea
-              value={preferences}
-              onChange={(event) => setPreferences(event.target.value)}
-              placeholder="Tell the stylist what you want..."
-              readOnly={listening}
-              className="mt-5 min-h-[156px] w-full rounded-[1.8rem] border border-white/10 bg-slate-950/85 p-5 text-sm leading-relaxed text-white outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-400/40 read-only:cursor-default read-only:border-cyan-400/30"
-            />
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                onClick={toggleListening}
-                className={`inline-flex h-12 items-center justify-center gap-2 rounded-full px-5 text-sm font-medium transition-colors ${
-                  listening
-                    ? "bg-rose-500 text-white hover:bg-rose-400"
-                    : "border border-white/10 text-white hover:border-cyan-400/30 hover:text-cyan-200"
-                }`}
-              >
-                {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                {listening ? "Stop listening" : "Start talking"}
-              </button>
-              <button
-                onClick={handleAgentSubmit}
-                disabled={agentLoading}
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Wand2 className="h-4 w-4" />
-                {agentLoading ? "Tuning preset..." : "Create live mashup"}
-              </button>
-            </div>
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                onClick={() => {
-                  if (speaking) {
-                    stopSpeaking();
-                  }
-                  setVoiceReplyEnabled((current) => !current);
-                }}
-                disabled={!speechSynthesisSupported}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {voiceReplyEnabled ? (
-                  <Volume2 className="h-3.5 w-3.5" />
-                ) : (
-                  <VolumeX className="h-3.5 w-3.5" />
-                )}
-                {voiceReplyEnabled ? "Voice reply on" : "Voice reply muted"}
-              </button>
-              <div className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1.5 text-xs font-medium text-slate-400">
-                {speechRecognitionSupported ? "Chrome mic ready" : "Mic best in Chrome"}
+        <div className="flex min-h-0 flex-col">
+          {!enteredSalon ? (
+            <motion.div
+              initial={{ opacity: 0, x: 24 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="overflow-hidden rounded-[2.3rem] border border-white/15 bg-[linear-gradient(180deg,rgba(255,247,240,0.9),rgba(252,225,214,0.82))] p-5 text-slate-900 shadow-[0_24px_80px_rgba(88,34,70,0.18)] backdrop-blur"
+            >
+              <div className="inline-flex items-center gap-2 rounded-full border border-[#6d4d6d]/20 bg-white/60 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-[#6d4d6d]">
+                <Sparkles className="h-3.5 w-3.5" />
+                Salon Concierge
               </div>
-            </div>
-
-            {voiceError && (
-              <div className="mt-4 rounded-[1.5rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                {voiceError}
-              </div>
-            )}
-
-            <div className="mt-5 rounded-[1.7rem] border border-white/10 bg-slate-950/65 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                  Stylist response
-                </div>
-                <button
-                  onClick={() => speakReply(agentReply)}
-                  disabled={!speechSynthesisSupported || !agentReply.trim()}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Volume2 className="h-3.5 w-3.5" />
-                  Hear it
-                </button>
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-slate-200">
-                {agentReply}
+              <h4 className="mt-4 text-3xl font-medium tracking-tight text-[#40273f]">
+                Choose where you want to begin.
+              </h4>
+              <p className="mt-3 text-sm leading-relaxed text-[#5d4358]">
+                This room is interactive. Click the mirror to open the live camera consult, open the look wall for instant try-ons, or upload a portrait from the color trolley.
               </p>
-            </div>
-          </div>
 
-          <div className="rounded-[2rem] border border-white/10 bg-slate-950/68 p-5 backdrop-blur">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                  Hero presets
-                </div>
-                <p className="mt-2 text-sm leading-relaxed text-slate-400">
-                  These are the tracked live looks the agent can actually render well.
-                </p>
-              </div>
-              <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-300">
-                {suggestions.length} live options
-              </div>
-            </div>
-            <div className="mt-4 grid gap-3">
-              {suggestions.map((suggestion) => {
-                const suggestionPresetId =
-                  suggestion.presetId || inferPresetIdFromStyleName(suggestion.name);
-                const active = suggestionPresetId === presetId;
-
-                return (
+              <div className="mt-6 grid gap-3">
+                {[
+                  {
+                    id: "mirror",
+                    title: "Sit at the mirror",
+                    body: "Start the webcam view and talk directly to the stylist.",
+                  },
+                  {
+                    id: "looks",
+                    title: "Browse the look wall",
+                    body: "Raise the drawer and flip through hairstyles in one place.",
+                  },
+                  {
+                    id: "portrait",
+                    title: "Bring a portrait",
+                    body: "Personalize the render with an uploaded face photo.",
+                  },
+                ].map((option) => (
                   <button
-                    key={`${suggestionPresetId}-${suggestion.name}`}
+                    key={option.id}
                     type="button"
-                    onClick={() => handlePresetSelect(suggestion.name)}
-                    className={`rounded-[1.6rem] border px-4 py-4 text-left transition-colors ${
-                      active
-                        ? "border-cyan-400/35 bg-cyan-400/10 text-white"
-                        : "border-white/10 bg-white/[0.03] text-slate-200 hover:border-white/20 hover:bg-white/[0.05]"
-                    }`}
+                    onClick={() =>
+                      void handleSalonHotspot(
+                        option.id as "mirror" | "looks" | "portrait"
+                      )
+                    }
+                    className="rounded-[1.6rem] border border-[#6d4d6d]/15 bg-white/60 px-4 py-4 text-left transition-colors hover:border-[#4dbdd1]/30 hover:bg-white/80"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-sm font-medium">{suggestion.name}</div>
-                      <div className="rounded-full border border-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                        {suggestionPresetId}
-                      </div>
-                    </div>
-                    <div className="mt-2 text-sm leading-relaxed text-slate-400">
-                      {suggestion.reason}
+                    <div className="text-sm font-semibold text-[#40273f]">{option.title}</div>
+                    <div className="mt-1 text-sm leading-relaxed text-[#6a5064]">
+                      {option.body}
                     </div>
                   </button>
-                );
-              })}
-            </div>
-          </div>
+                ))}
+              </div>
 
-          <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                  Personalize with portrait
+              <div className="mt-6 rounded-[1.8rem] border border-[#6d4d6d]/15 bg-[#4b2953] px-4 py-4 text-white">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#f7d9c9]">
+                  What happens next
                 </div>
-                <p className="mt-2 text-sm leading-relaxed text-slate-400">
-                  Optional, but it gives Gemini a better face reference for the realistic render and board.
-                </p>
+                <div className="mt-2 space-y-2 text-sm text-white/80">
+                  <p>1. The stylist picks a cut from the salon library.</p>
+                  <p>2. The mirror tracks your face live with webcam or portrait mode.</p>
+                  <p>3. Gemini renders the premium finish and salon handoff.</p>
+                </div>
               </div>
-              <button
-                onClick={() => portraitInputRef.current?.click()}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 px-4 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
-              >
-                <Upload className="h-3.5 w-3.5" />
-                Choose portrait
-              </button>
-            </div>
-            <input
-              ref={portraitInputRef}
-              type="file"
-              accept="image/*"
-              onChange={(event) => {
-                const file = event.target.files?.[0] || null;
-                setPortraitFile(file);
-                setPortraitError(null);
-              }}
-              className="hidden"
-            />
-            <div className="mt-4 rounded-[1.5rem] border border-white/10 bg-slate-950/60 px-4 py-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                Session portrait
-              </div>
-              <div className="mt-2 text-sm text-white">
-                {portraitFile?.name || (activeSelfieUrl ? "Portrait already in session" : "No portrait chosen yet")}
-              </div>
-              <div className="mt-4 flex flex-wrap gap-3">
+            </motion.div>
+          ) : (
+            <>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {workspaceTabs.map((tab) => {
+              const active = tab.id === activeTab;
+
+              return (
                 <button
-                  onClick={handlePortraitAnalyze}
-                  disabled={portraitBusy || !portraitFile}
-                  className="inline-flex h-11 items-center justify-center rounded-full bg-white px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {portraitBusy ? "Analyzing..." : "Analyze portrait"}
-                </button>
-              </div>
-              {portraitError && (
-                <div className="mt-4 rounded-[1.3rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                  {portraitError}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.14),transparent_28%),linear-gradient(160deg,rgba(9,14,26,0.96),rgba(8,10,18,0.9))] p-5 backdrop-blur">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-200">
-                  On-Face Render
-                </div>
-                <div className="mt-2 text-lg font-medium text-white">
-                  Realistic makeover preview
-                </div>
-                <p className="mt-2 text-sm leading-relaxed text-slate-400">
-                  The app auto-refreshes this once face tracking is steady, or you can force it manually.
-                </p>
-              </div>
-              <button
-                onClick={() => void handleRenderLook("manual")}
-                disabled={renderLookLoading}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-blue-300 px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-blue-200 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Sparkles className="h-4 w-4" />
-                {renderLookLoading ? "Rendering..." : "Render on my face"}
-              </button>
-            </div>
-
-            {renderLookError && (
-              <div className="mt-4 rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                {renderLookError}
-              </div>
-            )}
-
-            {renderLook && (
-              <div className="mt-5 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
-                <div className="relative min-h-[320px] overflow-hidden rounded-[1.8rem] border border-white/10 bg-slate-950/80">
-                  <Image
-                    src={renderLook.imageDataUrl}
-                    alt={renderLook.title}
-                    fill
-                    unoptimized
-                    sizes="(max-width: 1024px) 100vw, 40vw"
-                    className="object-cover"
-                  />
-                </div>
-                <div className="rounded-[1.8rem] border border-white/10 bg-white/[0.04] p-4">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Render brief
-                  </div>
-                  <div className="mt-2 text-xl font-medium text-white">
-                    {renderLook.title}
-                  </div>
-                  <p className="mt-2 text-sm leading-relaxed text-slate-300">
-                    {renderLook.brief}
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      onClick={() =>
-                        downloadDataUrl(
-                          renderLook.imageDataUrl,
-                          `${preset.id}-render.png`
-                        )
-                      }
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Save image
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.12),transparent_28%),linear-gradient(160deg,rgba(9,14,26,0.96),rgba(8,10,18,0.9))] p-5 backdrop-blur">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                  Nano Banana Finish
-                </div>
-                <div className="mt-2 text-lg font-medium text-white">
-                  Final stylist-ready board
-                </div>
-              </div>
-              <button
-                onClick={() => void handleGenerateStyleBoard()}
-                disabled={styleBoardLoading}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-amber-300 px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Sparkles className="h-4 w-4" />
-                {styleBoardLoading ? "Generating..." : "Generate style board"}
-              </button>
-            </div>
-
-            {styleBoardError && (
-              <div className="mt-4 rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                {styleBoardError}
-              </div>
-            )}
-
-            {styleBoard && (
-              <div className="mt-5 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
-                <div className="relative min-h-[320px] overflow-hidden rounded-[1.8rem] border border-white/10 bg-slate-950/80">
-                  <Image
-                    src={styleBoard.imageDataUrl}
-                    alt={styleBoard.title}
-                    fill
-                    unoptimized
-                    sizes="(max-width: 1024px) 100vw, 40vw"
-                    className="object-cover"
-                  />
-                </div>
-                <div className="rounded-[1.8rem] border border-white/10 bg-white/[0.04] p-4">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Board brief
-                  </div>
-                  <div className="mt-2 text-xl font-medium text-white">
-                    {styleBoard.title}
-                  </div>
-                  <p className="mt-2 text-sm leading-relaxed text-slate-300">
-                    {styleBoard.brief}
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      onClick={() =>
-                        downloadDataUrl(
-                          styleBoard.imageDataUrl,
-                          `${preset.id}-style-board.png`
-                        )
-                      }
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Save board
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                Session Memory
-              </div>
-              <div className="text-xs text-slate-500">
-                Last {Math.min(sessionTurns.length, 6)} turns
-              </div>
-            </div>
-            <div className="mt-4 space-y-3">
-              {sessionTurns.slice(-4).map((turn, index) => (
-                <div
-                  key={`${turn.speaker}-${index}-${turn.text.slice(0, 24)}`}
-                  className={`max-w-[92%] rounded-[1.5rem] border px-4 py-3 ${
-                    turn.speaker === "user"
-                      ? "ml-auto border-cyan-400/20 bg-cyan-400/10 text-cyan-50"
-                      : "border-white/10 bg-slate-950/65 text-slate-100"
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition-colors ${
+                    active
+                      ? "border-cyan-400/35 bg-cyan-400/10 text-cyan-100"
+                      : "border-white/10 bg-slate-950/55 text-slate-400 hover:border-white/20 hover:text-white"
                   }`}
                 >
-                  <div
-                    className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${
-                      turn.speaker === "user" ? "text-cyan-200" : "text-slate-500"
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="min-h-0 overflow-hidden rounded-[2.2rem] border border-white/10 bg-white/[0.04] p-5 backdrop-blur xl:max-h-[calc(100vh-8.5rem)] xl:overflow-y-auto">
+            {activeTab === "agent" && (
+              <>
+                <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">
+                  <Volume2 className="h-3.5 w-3.5" />
+                  Talk To The Stylist
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {QUICK_PROMPTS.map((prompt) => (
+                    <button
+                      key={prompt}
+                      onClick={() => {
+                        if (listening) {
+                          recognitionRef.current?.stop();
+                          setListening(false);
+                          setSpeechDraft("");
+                        }
+                        setPreferences(prompt);
+                      }}
+                      className="rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+
+                <textarea
+                  value={preferences}
+                  onChange={(event) => setPreferences(event.target.value)}
+                  placeholder="Tell the stylist what you want..."
+                  readOnly={listening}
+                  className="mt-5 min-h-[148px] w-full rounded-[1.8rem] border border-white/10 bg-slate-950/85 p-5 text-sm leading-relaxed text-white outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-400/40 read-only:cursor-default read-only:border-cyan-400/30"
+                />
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={toggleListening}
+                    className={`inline-flex h-12 items-center justify-center gap-2 rounded-full px-5 text-sm font-medium transition-colors ${
+                      listening
+                        ? "bg-rose-500 text-white hover:bg-rose-400"
+                        : "border border-white/10 text-white hover:border-cyan-400/30 hover:text-cyan-200"
                     }`}
                   >
-                    {turn.speaker === "user" ? "You" : "Stylist"}
-                  </div>
-                  <p className="mt-1 text-sm leading-relaxed">{turn.text}</p>
+                    {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                    {listening ? "Stop listening" : "Start talking"}
+                  </button>
+                  <button
+                    onClick={handleAgentSubmit}
+                    disabled={agentLoading}
+                    className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Wand2 className="h-4 w-4" />
+                    {agentLoading ? "Tuning preset..." : "Create live mashup"}
+                  </button>
                 </div>
-              ))}
-            </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => {
+                      if (speaking) {
+                        stopSpeaking();
+                      }
+                      setVoiceReplyEnabled((current) => !current);
+                    }}
+                    disabled={!voicePlaybackReady}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {voiceReplyEnabled ? (
+                      <Volume2 className="h-3.5 w-3.5" />
+                    ) : (
+                      <VolumeX className="h-3.5 w-3.5" />
+                    )}
+                    {voiceReplyEnabled ? "Voice reply on" : "Voice reply muted"}
+                  </button>
+                  <div className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1.5 text-xs font-medium text-slate-400">
+                    {speechRecognitionSupported ? "Chrome mic ready" : "Mic best in Chrome"}
+                  </div>
+                  <div className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1.5 text-xs font-medium text-slate-400">
+                    {elevenLabsReady ? "ElevenLabs voice ready" : "Browser voice fallback"}
+                  </div>
+                </div>
+
+                {voiceError && (
+                  <div className="mt-4 rounded-[1.5rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                    {voiceError}
+                  </div>
+                )}
+
+                <div className="mt-5 rounded-[1.7rem] border border-white/10 bg-slate-950/65 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                      Stylist response
+                    </div>
+                    <button
+                      onClick={() => void speakReply(agentReply)}
+                      disabled={!voicePlaybackReady || !agentReply.trim()}
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Volume2 className="h-3.5 w-3.5" />
+                      Hear it
+                    </button>
+                  </div>
+                  <p className="mt-3 text-sm leading-relaxed text-slate-200">
+                    {agentReply}
+                  </p>
+                </div>
+
+                <div className="mt-5 rounded-[1.8rem] border border-white/10 bg-white/[0.04] p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        Finish controls
+                      </div>
+                      <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                        Steer the color melt and makeover energy without leaving the live consultation.
+                      </p>
+                    </div>
+                    <div className="rounded-full border border-white/10 bg-slate-950/65 px-3 py-1.5 text-xs font-medium text-slate-300">
+                      {getColorLabel(tuning.colorDirection)}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+                    <div className="grid gap-2 sm:grid-cols-5">
+                      {HAIR_COLOR_OPTIONS.map((color) => {
+                        const palette = getOverlayPalette(color.id);
+                        const active = tuning.colorDirection === color.id;
+
+                        return (
+                          <button
+                            key={`agent-color-${color.id}`}
+                            type="button"
+                            onClick={() => handleColorSelect(color.id)}
+                            className={`rounded-[1.2rem] border px-3 py-3 text-left transition-colors ${
+                              active
+                                ? "border-cyan-400/35 bg-cyan-400/10"
+                                : "border-white/10 bg-slate-950/60 hover:border-white/20"
+                            }`}
+                          >
+                            <div
+                              className="h-10 rounded-[0.9rem]"
+                              style={{
+                                background: `linear-gradient(135deg, ${palette.shine}, ${palette.mid} 48%, ${palette.base} 100%)`,
+                              }}
+                            />
+                            <div className="mt-2 text-[11px] font-medium text-white">
+                              {getColorLabel(color.id)}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="grid gap-2">
+                      {(["subtle", "signature", "editorial"] as MakeoverLevel[]).map(
+                        (level) => (
+                          <button
+                            key={level}
+                            type="button"
+                            onClick={() => {
+                              setMakeoverLevel(level);
+                              setRenderLook(null);
+                              setStyleBoard(null);
+                            }}
+                            className={`rounded-[1.3rem] border px-4 py-3 text-left text-sm transition-colors ${
+                              makeoverLevel === level
+                                ? "border-fuchsia-400/35 bg-fuchsia-400/10 text-white"
+                                : "border-white/10 bg-slate-950/60 text-slate-300 hover:border-white/20"
+                            }`}
+                          >
+                            <div className="font-medium capitalize">{level}</div>
+                            <div className="mt-1 text-xs text-slate-400">
+                              {level === "subtle"
+                                ? "Keeps the shift believable and softly salon-ready."
+                                : level === "signature"
+                                  ? "Pushes the look with a premium editorial edge."
+                                  : "Turns the styling into a bold campaign moment."}
+                            </div>
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 rounded-[2rem] border border-white/10 bg-slate-950/68 p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        Expanded look library
+                      </div>
+                      <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                        The mirror drawer is the fast path. This panel gives you the full recommendation deck in one place.
+                      </p>
+                    </div>
+                    <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-300">
+                      {presetLibrary.length} live options
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {presetLibrary.map((suggestion) => {
+                      const suggestionPresetId =
+                        suggestion.presetId || inferPresetIdFromStyleName(suggestion.name);
+                      const active = suggestionPresetId === presetId;
+                      const recommended = recommendedPresets.some(
+                        (entry) =>
+                          (entry.presetId || inferPresetIdFromStyleName(entry.name)) ===
+                          suggestionPresetId
+                      );
+
+                      return (
+                        <button
+                          key={`${suggestionPresetId}-${suggestion.name}`}
+                          type="button"
+                          onClick={() => handlePresetSelect(suggestion.name)}
+                          className={`rounded-[1.6rem] border px-4 py-4 text-left transition-colors ${
+                            active
+                              ? "border-cyan-400/35 bg-cyan-400/10 text-white"
+                              : "border-white/10 bg-white/[0.03] text-slate-200 hover:border-white/20 hover:bg-white/[0.05]"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="text-sm font-medium">{suggestion.name}</div>
+                            <div className="flex flex-wrap gap-2">
+                              {recommended && (
+                                <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+                                  agent pick
+                                </div>
+                              )}
+                              <div className="rounded-full border border-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                                {suggestionPresetId}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-2 text-sm leading-relaxed text-slate-400">
+                            {suggestion.reason}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="mt-5 rounded-[2rem] border border-white/10 bg-white/[0.04] p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                      Session Memory
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      Last {Math.min(sessionTurns.length, 6)} turns
+                    </div>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {sessionTurns.slice(-4).map((turn, index) => (
+                      <div
+                        key={`${turn.speaker}-${index}-${turn.text.slice(0, 24)}`}
+                        className={`max-w-[92%] rounded-[1.5rem] border px-4 py-3 ${
+                          turn.speaker === "user"
+                            ? "ml-auto border-cyan-400/20 bg-cyan-400/10 text-cyan-50"
+                            : "border-white/10 bg-slate-950/65 text-slate-100"
+                        }`}
+                      >
+                        <div
+                          className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${
+                            turn.speaker === "user" ? "text-cyan-200" : "text-slate-500"
+                          }`}
+                        >
+                          {turn.speaker === "user" ? "You" : "Stylist"}
+                        </div>
+                        <p className="mt-1 text-sm leading-relaxed">{turn.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {activeTab === "portrait" && (
+              <div className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                      Personalize with portrait
+                    </div>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                      Keep everything in the same session. Upload once, analyze once, and the preview plus renders update from here.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => portraitInputRef.current?.click()}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 px-4 text-xs font-medium text-white transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    Choose portrait
+                  </button>
+                </div>
+                <input
+                  ref={portraitInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] || null;
+                    setPortraitFile(file);
+                    setPortraitError(null);
+                  }}
+                  className="hidden"
+                />
+                <div className="mt-5 grid gap-4 lg:grid-cols-[0.92fr_1.08fr]">
+                  <div className="relative min-h-[240px] overflow-hidden rounded-[1.8rem] border border-white/10 bg-slate-950/80">
+                    {activeSelfieUrl ? (
+                      <Image
+                        src={activeSelfieUrl}
+                        alt="Session portrait"
+                        fill
+                        unoptimized
+                        sizes="(max-width: 1024px) 100vw, 32vw"
+                        className="object-cover"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-500">
+                        Your session portrait will appear here.
+                      </div>
+                    )}
+                  </div>
+                  <div className="rounded-[1.8rem] border border-white/10 bg-slate-950/60 px-4 py-4">
+                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                      Session portrait
+                    </div>
+                    <div className="mt-2 text-sm text-white">
+                      {portraitFile?.name ||
+                        (activeSelfieUrl
+                          ? "Portrait already in session"
+                          : "No portrait chosen yet")}
+                    </div>
+                    <div className="mt-2 text-sm leading-relaxed text-slate-400">
+                      Best results come from a straight-on image with visible hairline and soft light.
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <button
+                        onClick={handlePortraitAnalyze}
+                        disabled={portraitBusy || !portraitFile}
+                        className="inline-flex h-11 items-center justify-center rounded-full bg-white px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {portraitBusy ? "Analyzing..." : "Analyze portrait"}
+                      </button>
+                    </div>
+                    {portraitError && (
+                      <div className="mt-4 rounded-[1.3rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                        {portraitError}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "render" && (
+              <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.14),transparent_28%),linear-gradient(160deg,rgba(9,14,26,0.96),rgba(8,10,18,0.9))] p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-200">
+                      On-Face Render
+                    </div>
+                    <div className="mt-2 text-lg font-medium text-white">
+                      Realistic makeover preview
+                    </div>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                      This auto-refreshes once tracking is steady, or you can force a new render manually.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => void handleRenderLook("manual")}
+                    disabled={renderLookLoading}
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-blue-300 px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-blue-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {renderLookLoading ? "Rendering..." : "Render on my face"}
+                  </button>
+                </div>
+
+                <div className="mt-4 rounded-[1.5rem] border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-300">
+                  {faceLockActive
+                    ? `Tracking is ${anchorDiagnostics.label}. Hold still for one beat and the auto render will stay cleaner.`
+                    : "Turn on webcam or analyze a portrait to unlock the realistic render."}
+                </div>
+
+                {renderLookError && (
+                  <div className="mt-4 rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                    {renderLookError}
+                  </div>
+                )}
+
+                {renderLook ? (
+                  <div className="mt-5 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+                    <div className="relative min-h-[320px] overflow-hidden rounded-[1.8rem] border border-white/10 bg-slate-950/80">
+                      <Image
+                        src={renderLook.imageDataUrl}
+                        alt={renderLook.title}
+                        fill
+                        unoptimized
+                        sizes="(max-width: 1024px) 100vw, 40vw"
+                        className="object-cover"
+                      />
+                    </div>
+                    <div className="rounded-[1.8rem] border border-white/10 bg-white/[0.04] p-4">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        Render brief
+                      </div>
+                      <div className="mt-2 text-xl font-medium text-white">
+                        {renderLook.title}
+                      </div>
+                      <p className="mt-2 text-sm leading-relaxed text-slate-300">
+                        {renderLook.brief}
+                      </p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button
+                          onClick={() =>
+                            downloadDataUrl(
+                              renderLook.imageDataUrl,
+                              `${preset.id}-render.png`
+                            )
+                          }
+                          className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Save image
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-5 rounded-[1.8rem] border border-dashed border-white/10 bg-white/[0.03] px-4 py-8 text-center text-sm text-slate-400">
+                    Your realistic on-face render will appear here as soon as you generate it.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === "handoff" && (
+              <div className="space-y-5">
+                <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.12),transparent_28%),linear-gradient(160deg,rgba(9,14,26,0.96),rgba(8,10,18,0.9))] p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                        Nano Banana Finish
+                      </div>
+                      <div className="mt-2 text-lg font-medium text-white">
+                        Final stylist-ready board
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => void handleGenerateStyleBoard()}
+                      disabled={styleBoardLoading}
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-amber-300 px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      {styleBoardLoading ? "Generating..." : "Generate style board"}
+                    </button>
+                  </div>
+
+                  {styleBoardError && (
+                    <div className="mt-4 rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                      {styleBoardError}
+                    </div>
+                  )}
+
+                  {styleBoard ? (
+                    <div className="mt-5 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+                      <div className="relative min-h-[320px] overflow-hidden rounded-[1.8rem] border border-white/10 bg-slate-950/80">
+                        <Image
+                          src={styleBoard.imageDataUrl}
+                          alt={styleBoard.title}
+                          fill
+                          unoptimized
+                          sizes="(max-width: 1024px) 100vw, 40vw"
+                          className="object-cover"
+                        />
+                      </div>
+                      <div className="rounded-[1.8rem] border border-white/10 bg-white/[0.04] p-4">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Board brief
+                        </div>
+                        <div className="mt-2 text-xl font-medium text-white">
+                          {styleBoard.title}
+                        </div>
+                        <p className="mt-2 text-sm leading-relaxed text-slate-300">
+                          {styleBoard.brief}
+                        </p>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <button
+                            onClick={() =>
+                              downloadDataUrl(
+                                styleBoard.imageDataUrl,
+                                `${preset.id}-style-board.png`
+                              )
+                            }
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-cyan-400/30 hover:text-cyan-200"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            Save board
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-5 rounded-[1.8rem] border border-dashed border-white/10 bg-white/[0.03] px-4 py-8 text-center text-sm text-slate-400">
+                      Generate the final board here, then match it to salons without leaving the workspace.
+                    </div>
+                  )}
+                </div>
+
+                <SalonList
+                  selectedStyle={preset.label}
+                  location={location}
+                  onLocationChange={onLocationChange}
+                  onSearch={onFindSalons}
+                  loading={salonLoading}
+                  error={salonError}
+                  salons={salons}
+                  hasSearched={hasSearchedSalons}
+                />
+              </div>
+            )}
           </div>
+            </>
+          )}
         </div>
       </div>
     </section>

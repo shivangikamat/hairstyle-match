@@ -45,6 +45,33 @@ function renderPresetLayers(
           />
         </>
       );
+    case "italian-bob":
+      return (
+        <>
+          <path
+            d="M14 42 C18 18 82 18 86 42 L84 82 C76 106 64 118 50 120 C36 118 24 106 16 82 Z"
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M20 34 C28 22 72 22 80 34 C73 ${50 + partShift * 0.35} 64 63 50 67 C36 63 27 ${50 - partShift * 0.25} 20 34 Z`}
+            fill={`url(#${shineId})`}
+            opacity="0.34"
+          />
+          <path
+            d="M22 82 C32 88 40 92 50 92 C60 92 68 88 78 82"
+            stroke="rgba(255,255,255,0.16)"
+            strokeWidth={3}
+            strokeLinecap="round"
+            fill="none"
+          />
+          <path
+            d={`M26 ${fringeDrop} C34 ${fringeDrop - 7} 66 ${fringeDrop - 7} 74 ${fringeDrop} L72 58 C64 51 36 51 28 58 Z`}
+            fill="rgba(255,255,255,0.12)"
+            opacity={config.fringe === "none" ? 0.28 : 1}
+          />
+        </>
+      );
     case "soft-lob":
       return (
         <>
@@ -62,6 +89,33 @@ function renderPresetLayers(
             d={`M28 ${fringeDrop} C36 ${fringeDrop - 5} 40 ${fringeDrop + 6} 42 ${fringeDrop + 16} L34 62 C31 54 29 47 26 ${fringeDrop + 2} Z M72 ${fringeDrop} C64 ${fringeDrop - 5} 60 ${fringeDrop + 6} 58 ${fringeDrop + 16} L66 62 C69 54 71 47 74 ${fringeDrop + 2} Z`}
             fill="rgba(255,255,255,0.14)"
             opacity={config.fringe === "none" ? 0.35 : 1}
+          />
+        </>
+      );
+    case "face-frame-flip":
+      return (
+        <>
+          <path
+            d={`M16 36 C20 13 80 13 84 36 L81 104 C71 123 60 136 50 138 C40 136 29 123 19 104 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M25 29 C34 19 66 19 75 29 C70 ${49 + partShift * 0.4} 61 61 50 67 C39 61 30 ${49 - partShift * 0.25} 25 29 Z`}
+            fill={`url(#${shineId})`}
+            opacity="0.27"
+          />
+          <path
+            d="M18 108 C30 101 35 120 26 129 M82 108 C70 101 65 120 74 129"
+            stroke="rgba(255,255,255,0.18)"
+            strokeWidth={3.2 * wave}
+            strokeLinecap="round"
+            fill="none"
+          />
+          <path
+            d={`M29 ${fringeDrop + 2} C35 ${fringeDrop - 4} 39 ${fringeDrop + 6} 42 ${fringeDrop + 17} L34 61 C31 54 29 47 27 ${fringeDrop + 3} Z M71 ${fringeDrop + 2} C65 ${fringeDrop - 4} 61 ${fringeDrop + 6} 58 ${fringeDrop + 17} L66 61 C69 54 71 47 73 ${fringeDrop + 3} Z`}
+            fill="rgba(255,255,255,0.14)"
+            opacity={config.fringe === "none" ? 0.24 : 1}
           />
         </>
       );
@@ -121,6 +175,63 @@ function renderPresetLayers(
           />
         </>
       );
+    case "butterfly-blowout":
+      return (
+        <>
+          <path
+            d={`M12 34 C18 10 42 8 ${50 - partShift * 0.28} 28 C35 50 26 90 22 136 C16 140 8 138 8 130 C10 118 10 80 12 34 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M88 34 C82 10 58 8 ${50 + partShift * 0.14} 28 C65 50 74 90 78 136 C84 140 92 138 92 130 C90 118 90 80 88 34 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d="M22 28 C34 15 66 15 78 28 C72 45 64 63 58 82 C54 91 46 91 42 82 C36 63 28 45 22 28 Z"
+            fill={`url(#${shineId})`}
+            opacity="0.28"
+          />
+          <path
+            d={`M32 ${fringeDrop - 10} C39 ${fringeDrop + 6} 44 ${fringeDrop + 24} 47 ${fringeDrop + 45} M68 ${fringeDrop - 10} C61 ${fringeDrop + 6} 56 ${fringeDrop + 24} 53 ${fringeDrop + 45}`}
+            stroke="rgba(255,255,255,0.18)"
+            strokeWidth={2.8 * soft}
+            strokeLinecap="round"
+            fill="none"
+            opacity={config.fringe === "none" ? 0.22 : 1}
+          />
+          <path
+            d="M14 76 C30 73 32 94 22 110 M86 76 C70 73 68 94 78 110"
+            stroke="rgba(255,255,255,0.15)"
+            strokeWidth={3.2 * wave}
+            strokeLinecap="round"
+            fill="none"
+          />
+        </>
+      );
+    case "sleek-midi":
+      return (
+        <>
+          <path
+            d="M18 34 C22 14 42 10 50 26 C58 10 78 14 82 34 L78 126 C68 136 58 140 50 140 C42 140 32 136 22 126 Z"
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d="M24 27 C31 18 69 18 76 27 C68 40 61 52 56 70 C53 76 47 76 44 70 C39 52 32 40 24 27 Z"
+            fill={`url(#${shineId})`}
+            opacity="0.35"
+          />
+          <path
+            d="M26 32 L24 120 M74 32 L76 120"
+            stroke="rgba(255,255,255,0.12)"
+            strokeWidth={2.4}
+            strokeLinecap="round"
+            fill="none"
+          />
+        </>
+      );
     case "modern-shag":
       return (
         <g transform={`translate(${(1 - volume) * 4} ${(1 - volume) * 8}) scale(${volume})`}>
@@ -141,6 +252,29 @@ function renderPresetLayers(
             strokeLinecap="round"
             fill="none"
             opacity={config.fringe === "none" ? 0.25 : 1}
+          />
+        </g>
+      );
+    case "bixie-air":
+      return (
+        <g transform={`translate(${(1 - volume) * 3} ${(1 - volume) * 6}) scale(${volume})`}>
+          <path
+            d="M16 48 C20 20 80 20 84 48 L76 58 L84 69 L70 76 L66 90 L52 84 L40 94 L34 82 L20 78 L24 64 L14 57 Z"
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d="M28 37 C37 28 63 28 72 37 L65 48 L70 56 L58 60 L52 68 L45 64 L36 70 L33 60 L23 56 L28 47 Z"
+            fill={`url(#${shineId})`}
+            opacity="0.28"
+          />
+          <path
+            d={`M29 ${fringeDrop - 4} C39 ${fringeDrop - 12} 61 ${fringeDrop - 10} 71 ${fringeDrop - 4}`}
+            stroke="rgba(255,255,255,0.18)"
+            strokeWidth={config.fringe === "full" ? 3.2 : 2.2}
+            strokeLinecap="round"
+            fill="none"
+            opacity={config.fringe === "none" ? 0.22 : 1}
           />
         </g>
       );
@@ -166,6 +300,33 @@ function renderPresetLayers(
             d={`M18 62 C28 58 31 82 22 96 C14 107 18 121 27 126 M82 62 C72 58 69 82 78 96 C86 107 82 121 73 126`}
             stroke="rgba(255,255,255,0.18)"
             strokeWidth={3.2 * density}
+            strokeLinecap="round"
+            fill="none"
+          />
+        </g>
+      );
+    case "ribbon-waves":
+      return (
+        <g transform={`translate(${(1 - wave) * 3} ${(1 - wave) * 8}) scale(${wave})`}>
+          <path
+            d={`M16 34 C20 11 40 10 50 29 C36 48 29 88 26 138 C20 142 12 140 11 132 C12 118 13 81 16 34 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d={`M84 34 C80 11 60 10 50 29 C64 48 71 88 74 138 C80 142 88 140 89 132 C88 118 87 81 84 34 Z`}
+            fill={`url(#${gradientId})`}
+            opacity={config.layerOpacity.back}
+          />
+          <path
+            d="M23 26 C35 16 65 16 77 26 C71 42 65 58 58 78 C54 86 46 86 42 78 C35 58 29 42 23 26 Z"
+            fill={`url(#${shineId})`}
+            opacity="0.28"
+          />
+          <path
+            d="M19 70 C31 70 32 90 22 105 C14 117 17 131 28 136 M81 70 C69 70 68 90 78 105 C86 117 83 131 72 136"
+            stroke="rgba(255,255,255,0.18)"
+            strokeWidth={3.4 * density}
             strokeLinecap="round"
             fill="none"
           />

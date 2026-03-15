@@ -1,22 +1,23 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Scissors, Sparkles, ChevronRight, Menu } from "lucide-react";
+import {
+  ChevronRight,
+  MapPin,
+  Menu,
+  Scissors,
+  Sparkles,
+  Wand2,
+} from "lucide-react";
 import { motion } from "framer-motion";
-import { LampContainer } from "@/components/ui/lamp";
 import type {
   FaceProfile,
   HairstyleSuggestion,
   Salon,
   SalonSearchResponse,
 } from "@/lib/types";
-import SalonList from "@/components/SalonList";
 import LiveStyleStudio from "@/components/LiveStyleStudio";
-import HairstyleOverlay from "@/components/HairstyleOverlay";
-import {
-  createOverlayFromStyle,
-  HERO_PRESET_SUGGESTIONS,
-} from "@/lib/styleStudio";
+import { HERO_PRESET_SUGGESTIONS } from "@/lib/styleStudio";
 
 const STARTER_SUGGESTIONS: HairstyleSuggestion[] = HERO_PRESET_SUGGESTIONS;
 
@@ -120,204 +121,156 @@ export default function Page() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-cyan-500/30">
-      {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 py-4 md:px-12 bg-slate-950/50 backdrop-blur-md border-b border-white/5">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-500 flex items-center justify-center">
+    <div className="min-h-screen bg-[linear-gradient(180deg,#4d2658_0%,#8f6078_14%,#f1c2b1_14.2%,#f1c2b1_82%,#85639a_100%)] text-slate-900 selection:bg-cyan-300/40">
+      <div className="pointer-events-none fixed inset-x-0 top-0 h-20 bg-[linear-gradient(180deg,rgba(42,18,52,0.96),rgba(42,18,52,0.24))]" />
+
+      <nav className="sticky top-0 z-50 mx-auto flex max-w-[1580px] items-center justify-between px-4 py-5 md:px-8">
+        <div className="flex items-center gap-3 rounded-full border border-white/20 bg-[#2e1838]/90 px-4 py-2 text-white shadow-[0_18px_40px_rgba(41,16,49,0.28)] backdrop-blur">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-cyan-300 to-sky-500">
             <Scissors className="h-4 w-4 text-slate-950" />
           </div>
-          <span className="text-xl font-medium tracking-tight text-white">HairMatch</span>
+          <div>
+            <div className="text-lg font-semibold tracking-tight">HairMatch</div>
+            <div className="text-[10px] uppercase tracking-[0.24em] text-white/60">
+              Ai Salon Room
+            </div>
+          </div>
         </div>
-        <div className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-400">
-          <a href="#" className="hover:text-cyan-400 transition-colors">Services</a>
-          <a href="#" className="hover:text-cyan-400 transition-colors">Stylists</a>
-          <a href="#" className="hover:text-cyan-400 transition-colors">Lookbook</a>
-          <button className="px-5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all backdrop-blur-sm">
+
+        <div className="hidden items-center gap-8 rounded-full border border-white/15 bg-white/15 px-6 py-3 text-sm font-medium text-white/90 backdrop-blur md:flex">
+          <span>Mirror Room</span>
+          <span>Stylists</span>
+          <span>Lookbook</span>
+          <button className="rounded-full bg-[#2e1838] px-5 py-2 text-white shadow-[0_10px_24px_rgba(41,16,49,0.24)]">
             Book Appointment
           </button>
         </div>
-        <button className="md:hidden p-2 text-slate-400 hover:text-white">
-          <Menu className="h-6 w-6" />
+
+        <button className="rounded-full border border-white/20 bg-[#2e1838]/90 p-3 text-white md:hidden">
+          <Menu className="h-5 w-5" />
         </button>
       </nav>
 
-      {/* Hero Section */}
-      <LampContainer className="pt-20 pb-8">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1, duration: 0.8, ease: "easeInOut" }}
-          className="inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-4 py-1.5 text-xs font-medium uppercase tracking-[0.2em] text-cyan-300 -mt-8 mb-8"
-        >
-          <Sparkles className="h-3.5 w-3.5" />
-          <span>Premium AI Salon</span>
-        </motion.div>
-        
-        <motion.h1
-          initial={{ opacity: 0.5, y: 100 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3, duration: 0.8, ease: "easeInOut" }}
-          className="bg-gradient-to-b from-white to-slate-400 bg-clip-text text-center text-5xl font-medium tracking-tight text-transparent md:text-7xl lg:text-8xl"
-        >
-          Find your perfect <br /> <span className="text-cyan-400">aesthetic.</span>
-        </motion.h1>
-        
-        <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5, duration: 0.8 }}
-          className="mt-6 max-w-2xl text-center text-base md:text-lg text-slate-400 leading-relaxed px-4"
-        >
-          Start the live salon agent immediately, let MediaPipe track the look on
-          webcam or mannequin mode, and only add a portrait when you want the
-          realistic Gemini render to get more personal.
-        </motion.p>
-        
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.7, duration: 0.8 }}
-          className="mt-10 flex flex-col sm:flex-row gap-4 items-center"
-        >
-          <button
-            onClick={handleScrollToUpload}
-            className="group relative inline-flex h-12 items-center justify-center gap-2 overflow-hidden rounded-full bg-cyan-500 px-8 text-sm font-medium text-slate-950 transition-all hover:bg-cyan-400 hover:shadow-[0_0_40px_rgba(34,211,238,0.4)] disabled:opacity-70 disabled:cursor-not-allowed"
+      <main className="mx-auto max-w-[1580px] px-4 pb-8 pt-2 md:px-8">
+        <div className="grid gap-6 xl:grid-cols-[0.34fr_0.66fr]">
+          <motion.aside
+            initial={{ opacity: 0, y: 28 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="overflow-hidden rounded-[2.6rem] border border-white/25 bg-[linear-gradient(180deg,rgba(50,22,58,0.92),rgba(63,28,68,0.82))] p-6 text-white shadow-[0_30px_90px_rgba(67,24,69,0.26)]"
           >
-            <span className="flex items-center gap-2">
-              Start Session <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-            </span>
-          </button>
-          <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-slate-700 px-8 text-sm font-medium text-slate-300 transition-all hover:border-slate-500 hover:bg-slate-800/50 hover:text-white">
-            Explore Lookbook
-          </button>
-        </motion.div>
-      </LampContainer>
+            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-100">
+              <Sparkles className="h-3.5 w-3.5" />
+              Premium Ai Salon
+            </div>
 
-      {/* Content Section */}
-      <main className="relative z-10 mx-auto max-w-7xl px-6 py-24 md:px-12 lg:px-24 border-t border-white/5 bg-slate-950">
-        <motion.section
-          initial={{ opacity: 0, y: 40 }}
-          animate={{ opacity: 1, y: 0 }}
-          ref={studioRef}
-          className="relative overflow-hidden rounded-[3rem] border border-cyan-500/20 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.08),transparent_24%),linear-gradient(180deg,rgba(8,18,31,0.86),rgba(4,9,17,0.96))] p-8 shadow-2xl shadow-cyan-900/20 md:p-12"
-        >
-          <div className="pointer-events-none absolute -left-16 top-12 h-60 w-60 rounded-full bg-cyan-500/8 blur-3xl" />
-          <div className="pointer-events-none absolute bottom-0 right-0 h-72 w-72 rounded-full bg-fuchsia-500/8 blur-3xl" />
-          <div className="relative">
-              <div className="mb-10 flex flex-col items-start gap-4 md:flex-row md:items-end md:justify-between">
-                <div>
-                  <h2 className="text-3xl font-medium tracking-tight text-white mb-2">
-                    Your Live Salon Agent
-                  </h2>
-                  <p className="max-w-2xl text-slate-400">
-                    Talk to the stylist from the first second, keep the webcam
-                    on if you want a live framing loop, then add a portrait for
-                    stronger personalization without leaving the main stage.
-                  </p>
-                </div>
-                <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-4 py-2 text-sm font-medium text-cyan-100">
-                  {selfieUrl
-                    ? "Portrait synced into the session"
-                    : "Start with webcam or mannequin mode"}
-                </div>
-              </div>
+            <h1 className="mt-5 text-4xl font-medium tracking-tight md:text-5xl">
+              Enter the salon and try your next cut in the mirror.
+            </h1>
+            <p className="mt-4 max-w-xl text-base leading-relaxed text-white/74">
+              This is no longer a landing page. You step straight into the dressing
+              room, open the mirror, talk to the stylist, try on looks from the
+              bottom drawer, and finish with Gemini renders plus salon handoff.
+            </p>
 
-              <LiveStyleStudio
-                faceProfile={faceProfile}
-                suggestions={activeSuggestions}
-                selfieUrl={selfieUrl}
-                selectedStyle={resolvedSelectedStyle}
-                onSelectStyle={(styleName) => handleChooseStyle(styleName)}
-                onPortraitAnalyzed={handleResults}
-              />
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                onClick={handleScrollToUpload}
+                className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-cyan-300 px-6 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-200"
+              >
+                Enter Salon
+                <ChevronRight className="h-4 w-4" />
+              </button>
+              <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-white/15 px-6 text-sm font-medium text-white transition-colors hover:border-white/30 hover:bg-white/10">
+                Explore Lookbook
+              </button>
+            </div>
 
-              <div className="grid gap-6 md:grid-cols-3 xl:grid-cols-6">
-                {activeSuggestions.map((style, i) => (
-                  <motion.article
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: i * 0.1 }}
-                    key={style.name}
-                    className={`group overflow-hidden rounded-2xl border bg-slate-950/50 transition-colors ${
-                      resolvedSelectedStyle === style.name
-                        ? "border-cyan-400/60 shadow-[0_0_0_1px_rgba(34,211,238,0.15)]"
-                        : "border-white/10 hover:bg-slate-900/80"
-                    }`}
-                  >
-                    <div className="relative aspect-[4/5] w-full overflow-hidden bg-slate-800">
-                      {selfieUrl ? (
-                        <>
-                          <div
-                            aria-label="Your selfie with hairstyle overlay"
-                            className="h-full w-full bg-cover bg-center opacity-90"
-                            style={{ backgroundImage: `url(${selfieUrl})` }}
-                          />
-                          <HairstyleOverlay
-                            compact
-                            config={createOverlayFromStyle(style.name)}
-                          />
-                        </>
-                      ) : (
-                        <div
-                          aria-label={style.name}
-                          className="h-full w-full bg-cover bg-center opacity-80 transition-transform duration-700 group-hover:scale-105 group-hover:opacity-100"
-                          style={{
-                            backgroundImage:
-                              "url(https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80)",
-                          }}
-                        />
-                      )}
+            <div className="mt-8 grid gap-3">
+              {[
+                {
+                  icon: Wand2,
+                  title: "Interactive mirror",
+                  body: "Click into the salon mirror to start webcam mode and live face tracking.",
+                },
+                {
+                  icon: Sparkles,
+                  title: "Bottom style drawer",
+                  body: "Browse cuts, shift the color melt, and keep the try-on in one continuous scene.",
+                },
+                {
+                  icon: MapPin,
+                  title: "Real handoff",
+                  body: "Generate the Gemini finish, save it, and move directly into salon matching.",
+                },
+              ].map((item) => (
+                <div
+                  key={item.title}
+                  className="rounded-[1.8rem] border border-white/12 bg-white/10 px-4 py-4 backdrop-blur"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/12">
+                      <item.icon className="h-4 w-4 text-cyan-100" />
                     </div>
-                    <div className="p-6">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <h3 className="text-lg font-medium text-white">{style.name}</h3>
-                        {resolvedSelectedStyle === style.name && (
-                          <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-200">
-                            Selected
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-slate-400 line-clamp-3 leading-relaxed">{style.reason}</p>
-                      <button
-                        onClick={() =>
-                          handleChooseStyle(style.name, { scrollToSalons: true })
-                        }
-                        className={`mt-6 w-full rounded-xl py-2.5 text-sm font-medium transition-colors ${
-                          resolvedSelectedStyle === style.name
-                            ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400"
-                            : "bg-white/5 text-white hover:bg-white/10"
-                        }`}
-                      >
-                        {resolvedSelectedStyle === style.name
-                          ? "Style selected"
-                          : "Use this look"}
-                      </button>
-                    </div>
-                  </motion.article>
-                ))}
-              </div>
+                    <div className="text-sm font-semibold text-white">{item.title}</div>
+                  </div>
+                  <div className="mt-2 text-sm leading-relaxed text-white/68">
+                    {item.body}
+                  </div>
+                </div>
+              ))}
+            </div>
 
-              <div ref={salonsRef}>
-                <SalonList
-                  selectedStyle={resolvedSelectedStyle}
-                  location={locationQuery}
-                  onLocationChange={setLocationQuery}
-                  onSearch={handleFindSalons}
-                  loading={salonLoading}
-                  error={salonError}
-                  salons={salons}
-                  hasSearched={hasSearchedSalons}
-                />
+            <div className="mt-8 rounded-[2rem] border border-white/12 bg-[#f6e2d7] px-5 py-5 text-slate-900">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#6a4c65]">
+                Session Snapshot
               </div>
-          </div>
-        </motion.section>
+              <div className="mt-3 grid gap-3 text-sm text-[#5f4b5d]">
+                <div className="flex items-center justify-between gap-3 rounded-[1.2rem] bg-white/70 px-4 py-3">
+                  <span>Looks available</span>
+                  <span className="font-semibold text-[#40273f]">
+                    {activeSuggestions.length}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-[1.2rem] bg-white/70 px-4 py-3">
+                  <span>Portrait status</span>
+                  <span className="font-semibold text-[#40273f]">
+                    {selfieUrl ? "Synced" : "Optional"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-[1.2rem] bg-white/70 px-4 py-3">
+                  <span>Salon handoff</span>
+                  <span className="font-semibold text-[#40273f]">
+                    {hasSearchedSalons ? "In progress" : "Ready"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </motion.aside>
+
+          <motion.section
+            initial={{ opacity: 0, y: 28 }}
+            animate={{ opacity: 1, y: 0 }}
+            ref={studioRef}
+            className="relative"
+          >
+            <LiveStyleStudio
+              faceProfile={faceProfile}
+              suggestions={activeSuggestions}
+              selfieUrl={selfieUrl}
+              selectedStyle={resolvedSelectedStyle}
+              onSelectStyle={(styleName) => handleChooseStyle(styleName)}
+              onPortraitAnalyzed={handleResults}
+              location={locationQuery}
+              onLocationChange={setLocationQuery}
+              onFindSalons={handleFindSalons}
+              salonLoading={salonLoading}
+              salonError={salonError}
+              salons={salons}
+              hasSearchedSalons={hasSearchedSalons}
+            />
+          </motion.section>
+        </div>
       </main>
-      
-      {/* Super minimal footer */}
-      <footer className="border-t border-white/5 py-12 px-6 text-center text-slate-500 text-sm">
-        <p>© 2026 HairMatch by Antigravity. Premium Style AI.</p>
-      </footer>
     </div>
   );
 }
