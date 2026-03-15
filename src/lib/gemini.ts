@@ -1,5 +1,6 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import type {
+  ClientProfileMemory,
   FaceProfile,
   HairstyleSuggestion,
   HeroPresetId,
@@ -474,8 +475,15 @@ export async function generateStyleMashupWithGemini(params: {
   suggestions: HairstyleSuggestion[];
   currentStyle?: string | null;
   conversationHistory?: StyleAgentTurn[];
+  clientProfile?: ClientProfileMemory | null;
 }): Promise<StyleAgentResponse> {
-  const { preferences, suggestions, currentStyle, conversationHistory = [] } =
+  const {
+    preferences,
+    suggestions,
+    currentStyle,
+    conversationHistory = [],
+    clientProfile,
+  } =
     params;
   const livePreferenceContext = buildLivePreferenceContext(
     preferences,
@@ -509,6 +517,23 @@ ${suggestions
   .join("\n")}
 
 Current selected style: ${currentStyle || "none"}
+Persistent client profile:
+${
+  clientProfile
+    ? JSON.stringify(
+        {
+          summary: clientProfile.summary,
+          favoritePresetIds: clientProfile.favoritePresetIds,
+          rejectedPresetIds: clientProfile.rejectedPresetIds,
+          preferredColors: clientProfile.preferredColors,
+          maintenancePreference: clientProfile.maintenancePreference,
+          recentNotes: clientProfile.recentNotes.slice(-3),
+        },
+        null,
+        2
+      )
+    : "No returning client profile yet."
+}
 Recent conversation:
 ${
   conversationHistory.length > 0
@@ -554,6 +579,8 @@ Rules:
 - keep tuning values bounded and realistic
 - prefer believable, salon-ready advice over fantasy
 - if the user sounds subtle, keep makeoverLevel subtle or signature
+- avoid presets listed in rejectedPresetIds unless the new brief clearly overturns that preference
+- if favoritePresetIds or preferredColors are present, treat them as strong style memory
 `.trim();
 
   try {
@@ -590,6 +617,7 @@ export async function generateRenderLookWithGemini(params: {
   preferences?: string | null;
   preferencesSummary?: string | null;
   stylistReply?: string | null;
+  clientProfile?: ClientProfileMemory | null;
   faceProfile?: FaceProfile | null;
   selfie?: GeminiImageInput;
 }): Promise<RenderLookResponse> {
@@ -610,6 +638,7 @@ export async function generateRenderLookWithGemini(params: {
     preferences: params.preferences || null,
     preferencesSummary: params.preferencesSummary || null,
     stylistReply: params.stylistReply || null,
+    clientProfile: params.clientProfile || null,
     faceProfile: params.faceProfile || null,
   });
   const imagePayload = await generateImagePayload({
@@ -636,6 +665,7 @@ export async function generateStyleBoardWithGemini(params: {
   preferences?: string | null;
   preferencesSummary?: string | null;
   stylistReply?: string | null;
+  clientProfile?: ClientProfileMemory | null;
   faceProfile?: FaceProfile | null;
   selfie?: GeminiImageInput;
 }): Promise<StyleBoardResponse> {
@@ -656,6 +686,7 @@ export async function generateStyleBoardWithGemini(params: {
     preferences: params.preferences || null,
     preferencesSummary: params.preferencesSummary || null,
     stylistReply: params.stylistReply || null,
+    clientProfile: params.clientProfile || null,
     faceProfile: params.faceProfile || null,
   });
   const imagePayload = await generateImagePayload({

@@ -4,6 +4,8 @@ export type FaceProfile = {
   skinTone: string;
 };
 
+export type PageStage = "lobby" | "studio";
+
 export type HairstyleSuggestion = {
   name: string;
   reason: string;
@@ -13,6 +15,27 @@ export type HairstyleSuggestion = {
 export type StyleAgentTurn = {
   speaker: "user" | "agent";
   text: string;
+};
+
+export type ClientProfileMemory = {
+  summary: string;
+  favoritePresetIds: HeroPresetId[];
+  rejectedPresetIds: HeroPresetId[];
+  preferredColors: HairColorName[];
+  maintenancePreference: "low" | "medium" | "high" | "flexible";
+  recentNotes: string[];
+  lastPresetId: HeroPresetId | null;
+  portraitAssetId: string | null;
+  updatedAt: string | null;
+  faceProfile?: FaceProfile | null;
+};
+
+export type PersistedPortraitAsset = {
+  id: string;
+  dataUrl: string;
+  previewDataUrl: string;
+  mimeType: string;
+  updatedAt: string;
 };
 
 export type Salon = {
@@ -221,6 +244,7 @@ export type RenderLookRequest = {
   preferences?: string | null;
   preferencesSummary?: string | null;
   stylistReply?: string | null;
+  clientProfile?: ClientProfileMemory | null;
   faceProfile?: FaceProfile | null;
   selfieDataUrl?: string | null;
 };

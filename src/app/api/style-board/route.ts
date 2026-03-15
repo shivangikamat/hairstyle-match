@@ -1,9 +1,31 @@
 import { NextResponse } from "next/server";
 import { generateStyleBoardWithGemini } from "@/lib/gemini";
-import type { FaceProfile, MakeoverLevel, PresetTuning } from "@/lib/types";
+import type {
+  ClientProfileMemory,
+  FaceProfile,
+  MakeoverLevel,
+  PresetTuning,
+} from "@/lib/types";
 import { inferPresetIdFromStyleName } from "@/lib/styleStudio";
 
 export const runtime = "nodejs";
+
+function isPresetId(value?: string | null) {
+  return (
+    value === "precision-bob" ||
+    value === "italian-bob" ||
+    value === "soft-lob" ||
+    value === "face-frame-flip" ||
+    value === "curtain-cloud" ||
+    value === "curtain-gloss" ||
+    value === "butterfly-blowout" ||
+    value === "sleek-midi" ||
+    value === "modern-shag" ||
+    value === "bixie-air" ||
+    value === "volume-waves" ||
+    value === "ribbon-waves"
+  );
+}
 
 function parseDataUrl(dataUrl?: string | null) {
   if (!dataUrl || typeof dataUrl !== "string") {
@@ -34,11 +56,15 @@ export async function POST(request: Request) {
       preferences?: string | null;
       preferencesSummary?: string | null;
       stylistReply?: string | null;
+      clientProfile?: ClientProfileMemory | null;
       faceProfile?: FaceProfile | null;
       selfieDataUrl?: string | null;
     };
     const selectedStyle = body.selectedStyle?.trim() || body.mashupName?.trim() || null;
-    const presetId = inferPresetIdFromStyleName(selectedStyle, body.preferences || "");
+    const presetId =
+      body.presetId && isPresetId(body.presetId)
+        ? body.presetId
+        : inferPresetIdFromStyleName(selectedStyle, body.preferences || "");
 
     const payload = await generateStyleBoardWithGemini({
       selectedStyle,
@@ -49,6 +75,10 @@ export async function POST(request: Request) {
       preferences: body.preferences || null,
       preferencesSummary: body.preferencesSummary || null,
       stylistReply: body.stylistReply || null,
+      clientProfile:
+        body.clientProfile && typeof body.clientProfile === "object"
+          ? body.clientProfile
+          : null,
       faceProfile: body.faceProfile || null,
       selfie: parseDataUrl(body.selfieDataUrl),
     });

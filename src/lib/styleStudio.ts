@@ -1,4 +1,5 @@
 import type {
+  ClientProfileMemory,
   DetectedFaceFrame,
   FaceAnchorDiagnostics,
   FaceProfile,
@@ -1589,9 +1590,29 @@ function buildSharedPromptContext(params: {
   preferences?: string | null;
   preferencesSummary?: string | null;
   stylistReply?: string | null;
+  clientProfile?: ClientProfileMemory | null;
   faceProfile?: FaceProfile | null;
 }) {
   const preset = getHeroPreset(params.presetId);
+  const profileSummary = params.clientProfile
+    ? [
+        params.clientProfile.summary,
+        params.clientProfile.favoritePresetIds.length > 0
+          ? `approved looks: ${params.clientProfile.favoritePresetIds.join(", ")}`
+          : null,
+        params.clientProfile.rejectedPresetIds.length > 0
+          ? `rejected looks: ${params.clientProfile.rejectedPresetIds.join(", ")}`
+          : null,
+        params.clientProfile.preferredColors.length > 0
+          ? `preferred colors: ${params.clientProfile.preferredColors.join(", ")}`
+          : null,
+        params.clientProfile.maintenancePreference !== "flexible"
+          ? `maintenance: ${params.clientProfile.maintenancePreference}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(". ")
+    : "";
 
   return {
     selectedStyle: params.selectedStyle?.trim() || preset.label,
@@ -1602,6 +1623,7 @@ function buildSharedPromptContext(params: {
     brief:
       params.stylistReply?.trim() ||
       `Keep the ${preset.label} look premium, believable, and flattering on the actual face.`,
+    profileSummary: profileSummary || "No persistent client profile supplied.",
     faceNotes: params.faceProfile
       ? `${params.faceProfile.faceShape} face shape, ${params.faceProfile.hairTexture} natural texture, ${params.faceProfile.skinTone} tone.`
       : "No face profile supplied.",
@@ -1617,6 +1639,7 @@ export function buildRenderLookPrompt(params: {
   preferences?: string | null;
   preferencesSummary?: string | null;
   stylistReply?: string | null;
+  clientProfile?: ClientProfileMemory | null;
   faceProfile?: FaceProfile | null;
 }) {
   const preset = getHeroPreset(params.presetId);
@@ -1630,6 +1653,7 @@ Preset: ${context.presetLabel} (${preset.id})
 Makeover level: ${params.makeoverLevel}
 Preference summary: ${context.summary}
 Stylist direction: ${context.brief}
+Returning client profile: ${context.profileSummary}
 Face notes: ${context.faceNotes}
 Preset styling notes: ${preset.description}
 Tuning:
@@ -1664,6 +1688,7 @@ export function buildStyleBoardPrompt(params: {
   preferences?: string | null;
   preferencesSummary?: string | null;
   stylistReply?: string | null;
+  clientProfile?: ClientProfileMemory | null;
   faceProfile?: FaceProfile | null;
 }) {
   const preset = getHeroPreset(params.presetId);
@@ -1677,6 +1702,7 @@ Preset: ${context.presetLabel} (${preset.id})
 Makeover level: ${params.makeoverLevel}
 Preference summary: ${context.summary}
 Stylist direction: ${context.brief}
+Returning client profile: ${context.profileSummary}
 Face notes: ${context.faceNotes}
 Preset styling notes: ${preset.description}
 Tuning:
