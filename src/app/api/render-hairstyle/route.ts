@@ -10,7 +10,7 @@ type RenderRequest = {
 };
 
 function getClient() {
-  const apiKey = "AIzaSyCqsaGaq-sR07vxa5UGQdc3CUNXnCfF1fQ";
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is not set");
   }
@@ -32,7 +32,7 @@ export async function POST(request: Request) {
 
     const model = client.getGenerativeModel({
       // Image-capable Gemini model for edits / generations.
-      model: "gemini-pro-vision",
+      model: "gemini-1.5-flash",
     });
 
     const prompt = `

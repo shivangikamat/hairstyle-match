@@ -22,6 +22,13 @@ export default function N8nChatWidget() {
           'Hi there! 👋',
           'My name is Nathan. How can I assist you today?'
         ],
+        onResponseReceived: (message) => {
+          console.log('n8n response received:', message);
+          // Dispatch a custom event to update the SalonList
+          window.dispatchEvent(new CustomEvent('n8n-chat-response', { 
+            detail: { text: message.text || '' } 
+          }));
+        },
         theme: {
           color: {
             primary: '#06b6d4',      // Cyan 500

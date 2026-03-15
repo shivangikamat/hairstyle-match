@@ -2,6 +2,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { UploadCloud, Camera, CheckCircle2 } from "lucide-react";
+import { motion } from "framer-motion";
 
 type Suggestion = {
   name: string;
@@ -31,7 +33,6 @@ export default function SelfieUploader({ onResults }: Props) {
     }
   };
 
-  // Clean up object URL when component unmounts or file changes
   useEffect(() => {
     return () => {
       if (previewUrl) {
@@ -40,16 +41,11 @@ export default function SelfieUploader({ onResults }: Props) {
     };
   }, [previewUrl]);
 
-  const handleAnalyze = async () => {
-    if (!selectedFile) {
-      alert("Please upload a selfie first.");
-      return;
-    }
-
+  const analyzeFile = async (file: File) => {
     setLoading(true);
     try {
       const formData = new FormData();
-      formData.append("file", selectedFile);
+      formData.append("file", file);
 
       const response = await fetch("/api/analyze-selfie", {
         method: "POST",
@@ -57,58 +53,116 @@ export default function SelfieUploader({ onResults }: Props) {
       });
 
       const data = await response.json();
-      if (previewUrl && data.suggestions && data.selfie?.data) {
+
+      if (data.suggestions && data.selfie?.data) {
+        const fileUrl = URL.createObjectURL(file);
+        setPreviewUrl(fileUrl);
+        
         onResults?.({
           suggestions: data.suggestions,
-          imageUrl: previewUrl,
+          imageUrl: fileUrl,
           selfieBase64: data.selfie.data,
           mimeType: data.selfie.mimeType || "image/jpeg",
         });
+      } else {
+        alert("Failed to analyze selfie. Check server logs.");
       }
     } catch (error) {
       console.error("Error analyzing selfie:", error);
+      alert("Error calling analysis API.");
     } finally {
       setLoading(false);
     }
   };
 
+  const handleAnalyze = () => {
+    if (selectedFile) {
+      analyzeFile(selectedFile);
+    }
+  };
+
+  const handleUseSample = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch("/sample-face.jpg");
+      const blob = await res.blob();
+      const file = new File([blob], "sample-face.jpg", { type: "image/jpeg" });
+      setSelectedFile(file);
+      const objectUrl = URL.createObjectURL(file);
+      setPreviewUrl(objectUrl);
+      analyzeFile(file);
+    } catch (error) {
+      console.error("Failed to load sample image:", error);
+      setLoading(false);
+    }
+  };
+
   return (
-    <section className="rounded-xl border p-6 shadow-sm">
-      <h2 className="mb-2 text-2xl font-semibold">Upload Selfie</h2>
-      <p className="mb-4 text-sm text-gray-600">
-        Upload a clear front-facing photo. We&apos;ll send it to Gemini to
-        analyze your face shape and suggest styles.
-      </p>
+    <section className="w-full">
+      <div className="max-w-3xl">
+        <h2 className="mb-4 text-3xl md:text-5xl font-black text-white tracking-tight">Upload Portrait</h2>
+        <p className="mb-10 text-base md:text-xl text-slate-300 font-medium leading-relaxed">
+          Upload a clear front-facing photo. Our AI will precisely map your facial features
+          and construct visually stunning styles meant to elevate your aesthetic.
+        </p>
 
-      <input
-        type="file"
-        accept="image/*"
-        onChange={handleFileChange}
-        className="mb-4 block w-full text-sm text-gray-500"
-      />
-
-      <button
-        onClick={handleAnalyze}
-        disabled={loading}
-        className="rounded-lg bg-black px-4 py-2 text-white disabled:opacity-50"
-      >
-        {loading ? "Analyzing..." : "Analyze Selfie"}
-      </button>
-
-      {previewUrl && (
-        <div className="mt-4 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-          <div className="overflow-hidden rounded-xl border bg-slate-900/30">
-            <img
-              src={previewUrl}
-              alt="Uploaded selfie preview"
-              className="h-40 w-32 object-cover"
-            />
-          </div>
-          <p className="text-xs text-gray-500">
-            This is the image we&apos;ll use to preview your hairstyles.
-          </p>
+        <div className="mb-10 relative">
+          <label className={`flex flex-col items-center justify-center w-full h-56 border-2 border-dashed rounded-3xl cursor-pointer transition-all duration-300 ${previewUrl ? 'border-primary-purple bg-primary-purple/10' : 'border-white/20 bg-black/20 hover:bg-black/40 hover:border-white/40'}`}>
+            <div className="flex flex-col items-center justify-center pt-5 pb-6">
+              {previewUrl ? (
+                <CheckCircle2 className="w-14 h-14 text-primary-purple mb-4" />
+              ) : (
+                <UploadCloud className="w-14 h-14 text-slate-400 mb-4" />
+              )}
+              <p className="mb-3 text-lg font-bold text-white">
+                <span className="text-primary-purple">Click to upload</span> or drag and drop
+              </p>
+              <p className="text-sm font-bold text-slate-500 uppercase tracking-widest">High Res JPG/PNG</p>
+            </div>
+            <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
+          </label>
         </div>
-      )}
+
+        <div className="flex flex-wrap items-center gap-6">
+          <button
+            onClick={handleAnalyze}
+            disabled={loading || !selectedFile}
+            className="btn-primary"
+          >
+            {loading ? "Analyzing Geometry..." : "Analyze Portrait"} <Camera className="w-5 h-5 shrink-0" />
+          </button>
+
+          <button
+            onClick={handleUseSample}
+            disabled={loading}
+            className="btn-secondary"
+          >
+            Use Sample Model
+          </button>
+        </div>
+
+        {previewUrl && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-12 flex flex-col sm:flex-row items-center gap-8 p-8 rounded-3xl bg-white/5 border border-white/10"
+          >
+            <div className="relative w-28 h-28 overflow-hidden rounded-2xl border border-primary-purple shadow-[0_0_20px_rgba(178,134,194,0.3)] shrink-0">
+              <img
+                src={previewUrl}
+                alt="Selected portrait"
+                className="w-full h-full object-cover saturate-110"
+              />
+            </div>
+            <div>
+              <h4 className="text-white font-black text-xl mb-2">Portrait Secured</h4>
+              <p className="text-base font-medium text-slate-400 leading-relaxed">
+                Your features are mapped. Press &quot;Analyze Portrait&quot; to find your mathematically perfect hairstyles.
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </div>
     </section>
   );
 }

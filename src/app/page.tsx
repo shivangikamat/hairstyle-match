@@ -1,285 +1,163 @@
-/* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useState, useRef } from "react";
-import { Scissors, Sparkles, MapPin, ChevronRight, Menu } from "lucide-react";
+import { useState } from "react";
+import { Scissors, Menu, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { LampContainer } from "@/components/ui/lamp";
 import type { HairstyleSuggestion } from "@/lib/types";
 import SelfieUploader from "@/components/SelfieUploader";
 import SalonList from "@/components/SalonList";
+import InteractiveSalonBackground from "@/components/InteractiveSalonBackground";
+
+type ModalState = 'none' | 'selfie' | 'salons' | 'hairstyles';
 
 export default function Page() {
+  const [activeModal, setActiveModal] = useState<ModalState>('none');
   const [suggestions, setSuggestions] = useState<HairstyleSuggestion[]>([]);
-  const [selfieUrl, setSelfieUrl] = useState<string | null>(null);
-  const [selfieBase64, setSelfieBase64] = useState<string | null>(null);
-  const [selfieMime, setSelfieMime] = useState<string | null>(null);
-  const [renderedImages, setRenderedImages] = useState<Record<string, string>>(
-    {}
-  );
-
-  const resultsRef = useRef<HTMLDivElement | null>(null);
 
   const handleResults = (payload: {
     suggestions: HairstyleSuggestion[];
-    imageUrl: string;
     selfieBase64: string;
     mimeType: string;
   }) => {
     setSuggestions(payload.suggestions || []);
-    setSelfieUrl(payload.imageUrl);
-    setSelfieBase64(payload.selfieBase64);
-    setSelfieMime(payload.mimeType);
-
-    if (resultsRef.current) {
-      resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
+    setActiveModal('hairstyles');
   };
 
-  const handleScrollToUpload = () => {
-    if (resultsRef.current) {
-      resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  };
-
-  const handleRenderHairstyle = async (styleName: string) => {
-    if (!selfieBase64 || !selfieMime) return;
-
-    // Avoid re-rendering if we already have an image for this style.
-    if (renderedImages[styleName]) return;
-
-    const res = await fetch("/api/render-hairstyle", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        hairstyleName: styleName,
-        selfieBase64,
-        mimeType: selfieMime,
-      }),
-    });
-
-    if (!res.ok) return;
-
-    const data = await res.json();
-    if (data.image) {
-      setRenderedImages((prev) => ({
-        ...prev,
-        [styleName]: data.image as string,
-      }));
-    }
-  };
+  const closeModal = () => setActiveModal('none');
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-cyan-500/30">
-      {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 py-4 md:px-12 bg-slate-950/50 backdrop-blur-md border-b border-white/5">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-500 flex items-center justify-center">
-            <Scissors className="h-4 w-4 text-slate-950" />
+    <div className="min-h-screen text-slate-100 font-sans flex flex-col overflow-hidden relative">
+      
+      {/* Interactive Background */}
+      <InteractiveSalonBackground 
+        onOpenSelfie={() => setActiveModal('selfie')}
+        onOpenSalons={() => setActiveModal('salons')}
+        onOpenHairstyles={() => setActiveModal('hairstyles')}
+      />
+
+      {/* Navigation Layered on Top */}
+      <nav className="fixed top-0 left-0 right-0 z-50 glass-nav flex items-center justify-between px-8 py-5 md:px-16 transition-all pointer-events-auto">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-2xl bg-primary-purple/20 border border-primary-purple/30 flex items-center justify-center shadow-[0_0_15px_rgba(178,134,194,0.3)]">
+            <Scissors className="h-5 w-5 text-primary-purple" />
           </div>
-          <span className="text-xl font-medium tracking-tight text-white">HairMatch</span>
+          <span className="text-2xl font-black tracking-tight text-white drop-shadow-md">HairMatch</span>
         </div>
-        <div className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-400">
-          <a href="#" className="hover:text-cyan-400 transition-colors">Services</a>
-          <a href="#" className="hover:text-cyan-400 transition-colors">Stylists</a>
-          <a href="#" className="hover:text-cyan-400 transition-colors">Lookbook</a>
-          <button className="px-5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all backdrop-blur-sm">
-            Book Appointment
-          </button>
+        <div className="hidden md:flex items-center gap-10 text-sm font-bold tracking-wide text-white drop-shadow-md">
+          <button onClick={() => setActiveModal('selfie')} className="hover:text-primary-purple transition-colors">Analyzer</button>
+          <button onClick={() => setActiveModal('hairstyles')} className="hover:text-primary-purple transition-colors">Lookbook</button>
+          <button onClick={() => setActiveModal('salons')} className="hover:text-primary-purple transition-colors">Salons</button>
         </div>
-        <button className="md:hidden p-2 text-slate-400 hover:text-white">
-          <Menu className="h-6 w-6" />
+        <button className="md:hidden p-2 text-white hover:text-primary-purple transition-colors">
+          <Menu className="h-7 w-7" />
         </button>
       </nav>
 
-      {/* Hero Section */}
-      <LampContainer className="pt-20">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1, duration: 0.8, ease: "easeInOut" }}
-          className="inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-4 py-1.5 text-xs font-medium uppercase tracking-[0.2em] text-cyan-300 -mt-8 mb-8"
-        >
-          <Sparkles className="h-3.5 w-3.5" />
-          <span>Premium AI Salon</span>
-        </motion.div>
-        
-        <motion.h1
-          initial={{ opacity: 0.5, y: 100 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3, duration: 0.8, ease: "easeInOut" }}
-          className="bg-gradient-to-b from-white to-slate-400 bg-clip-text text-center text-5xl font-medium tracking-tight text-transparent md:text-7xl lg:text-8xl"
-        >
-          Find your perfect <br /> <span className="text-cyan-400">aesthetic.</span>
-        </motion.h1>
-        
-        <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5, duration: 0.8 }}
-          className="mt-6 max-w-2xl text-center text-base md:text-lg text-slate-400 leading-relaxed px-4"
-        >
-          Upload your portrait, let our AI analyze your face shape and texture, 
-          and discover tailored hairstyle suggestions that you can take straight to our master stylists.
-        </motion.p>
-        
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.7, duration: 0.8 }}
-          className="mt-10 flex flex-col sm:flex-row gap-4 items-center"
-        >
-          <button
-            onClick={handleScrollToUpload}
-            className="group relative inline-flex h-12 items-center justify-center gap-2 overflow-hidden rounded-full bg-cyan-500 px-8 text-sm font-medium text-slate-950 transition-all hover:bg-cyan-400 hover:shadow-[0_0_40px_rgba(34,211,238,0.4)] disabled:opacity-70 disabled:cursor-not-allowed"
+      {/* Centered Instructions when no modal is open */}
+      <AnimatePresence>
+        {activeModal === 'none' && (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="absolute top-1/4 left-1/2 -translate-x-1/2 flex flex-col items-center text-center pointer-events-none z-10 w-full px-4"
           >
-            <span className="flex items-center gap-2">
-              Analyze Face <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-            </span>
-          </button>
-          <button className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-slate-700 px-8 text-sm font-medium text-slate-300 transition-all hover:border-slate-500 hover:bg-slate-800/50 hover:text-white">
-            Explore Lookbook
-          </button>
-        </motion.div>
-      </LampContainer>
-
-      {/* Content Section */}
-      <main className="relative z-10 mx-auto max-w-7xl px-6 py-24 md:px-12 lg:px-24 border-t border-white/5 bg-slate-950">
-
-        {/* Selfie upload + analysis panel – pulled slightly closer to the hero */}
-        <div className="mb-16 -mt-8" ref={resultsRef}>
-          <SelfieUploader onResults={handleResults} />
-        </div>
-
-        <div className="mb-20 grid gap-8 md:grid-cols-3">
-          <div className="group rounded-3xl border border-white/5 bg-white/[0.02] p-8 transition-colors hover:bg-white/[0.04]">
-            <div className="mb-6 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20 transition-transform group-hover:scale-110">
-              <Sparkles className="h-5 w-5" />
-            </div>
-            <h3 className="mb-3 text-lg font-medium text-white">Smart Match</h3>
-            <p className="text-sm leading-relaxed text-slate-400">
-              Styles mathematically tailored to your face shape, bone structure, and texture. No more guessing in the styling chair.
+            <h1 className="text-4xl md:text-6xl font-black tracking-tight text-white mb-4 drop-shadow-2xl">
+              Welcome to the <span className="text-gradient">Salon</span>.
+            </h1>
+            <p className="text-lg md:text-xl text-white/90 font-medium drop-shadow-lg max-w-lg">
+              Interact with the scene to begin shaping your perfect aesthetic. Click the mirror to analyze your look.
             </p>
-          </div>
-          
-          <div className="group rounded-3xl border border-white/5 bg-white/[0.02] p-8 transition-colors hover:bg-white/[0.04]">
-            <div className="mb-6 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20 transition-transform group-hover:scale-110">
-              <Scissors className="h-5 w-5" />
-            </div>
-            <h3 className="mb-3 text-lg font-medium text-white">Stylist Ready</h3>
-            <p className="text-sm leading-relaxed text-slate-400">
-              Export professional technical briefs to share with your stylist, ensuring they know the precise cut, angle, and finish required.
-            </p>
-          </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          <div className="group rounded-3xl border border-white/5 bg-white/[0.02] p-8 transition-colors hover:bg-white/[0.04]">
-            <div className="mb-6 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20 transition-transform group-hover:scale-110">
-              <MapPin className="h-5 w-5" />
-            </div>
-            <h3 className="mb-3 text-lg font-medium text-white">Premium Salons</h3>
-            <p className="text-sm leading-relaxed text-slate-400">
-              Seamlessly book appointments with curated master stylists in your area who specialize in your matched hair textures.
-            </p>
-          </div>
-        </div>
-
-        <AnimatePresence>
-          {suggestions.length > 0 && (
-            <motion.section 
-              initial={{ opacity: 0, y: 40 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-[2.5rem] border border-cyan-500/20 bg-gradient-to-b from-cyan-950/20 to-slate-900/40 p-8 md:p-12 shadow-2xl shadow-cyan-900/20"
+      {/* Modals Container */}
+      <AnimatePresence>
+        {activeModal !== 'none' && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm flex justify-center items-center p-4 md:p-8 overflow-y-auto"
+            onClick={closeModal}
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 20, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.95, y: 20, opacity: 0 }}
+              className="relative w-full max-w-5xl glass-panel rounded-3xl overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.8)] my-auto max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()} 
             >
-              <div className="mb-10 flex flex-col items-start gap-4 md:flex-row md:items-end md:justify-between">
-                <div>
-                  <h2 className="text-3xl font-medium tracking-tight text-white mb-2">
-                    Your Curated Looks
-                  </h2>
-                  <p className="text-slate-400 max-w-lg">
-                    Based on your facial structure analysis, our AI recommends these precise cuts. Show these directly to your stylist.
-                  </p>
-                </div>
-                <button className="text-sm font-medium text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
-                  View full analysis <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
+              {/* Close Button */}
+              <button 
+                onClick={closeModal}
+                className="absolute top-6 right-6 z-50 p-2 rounded-full bg-black/50 hover:bg-white/20 text-white transition-colors border border-white/20 backdrop-blur-md"
+              >
+                <X className="h-6 w-6" />
+              </button>
 
-              <div className="grid gap-6 md:grid-cols-3">
-                {suggestions.map((style, i) => (
-                  <motion.article
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: i * 0.1 }}
-                    key={style.name}
-                    className="group overflow-hidden rounded-2xl border border-white/10 bg-slate-950/50 hover:bg-slate-900/80 transition-colors"
-                  >
-                    <div className="relative aspect-[4/5] w-full overflow-hidden bg-slate-800">
-                      {renderedImages[style.name] ? (
-                        <img
-                          src={renderedImages[style.name]}
-                          alt={style.name}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : selfieUrl ? (
-                        <>
-                          <img
-                            src={selfieUrl}
-                            alt="Your selfie with hairstyle overlay"
-                            className="h-full w-full object-cover opacity-90"
-                          />
-                          {/* Fallback overlay while Gemini renders a bespoke image */}
-                          <img
-                            src={
-                              style.name.toLowerCase().includes("bob")
-                                ? "/hairstyles/bob.png"
-                                : style.name.toLowerCase().includes("fringe")
-                                  ? "/hairstyles/fringe.png"
-                                  : style.name.toLowerCase().includes("shag")
-                                    ? "/hairstyles/shag.png"
-                                    : "/hairstyles/default.png"
-                            }
-                            alt={style.name}
-                            className="pointer-events-none absolute left-1/2 top-[18%] w-[70%] -translate-x-1/2"
-                          />
-                        </>
-                      ) : (
-                        <img
-                          src={`https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80`}
-                          alt={style.name}
-                          className="h-full w-full object-cover opacity-80 transition-transform duration-700 group-hover:scale-105 group-hover:opacity-100"
-                        />
-                      )}
-                    </div>
-                    <div className="p-6">
-                      <h3 className="text-lg font-medium text-white mb-2">{style.name}</h3>
-                      <p className="text-sm text-slate-400 line-clamp-3 leading-relaxed">{style.reason}</p>
-                      <button
-                        className="mt-6 w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-sm font-medium text-white transition-colors"
-                        onClick={() => handleRenderHairstyle(style.name)}
-                        disabled={!selfieBase64}
-                      >
-                        {renderedImages[style.name]
-                          ? "Rendered with Gemini"
-                          : "Render with Gemini"}
-                      </button>
-                    </div>
-                  </motion.article>
-                ))}
-              </div>
-            </motion.section>
-          )}
-        </AnimatePresence>
+              <div className="p-8 md:p-12 overflow-y-auto custom-scrollbar flex-grow">
+                {activeModal === 'selfie' && (
+                   <SelfieUploader onResults={handleResults} />
+                )}
 
-        <SalonList />
-      </main>
+                {activeModal === 'salons' && (
+                   <div className="pt-4">
+                     <SalonList />
+                   </div>
+                )}
+
+                {activeModal === 'hairstyles' && (
+                  <div className="w-full pt-4">
+                    <div className="mb-10 flex flex-col items-start gap-2">
+                      <h2 className="text-3xl md:text-4xl font-black tracking-tight text-white">
+                        Your Curated Looks
+                      </h2>
+                      <p className="text-slate-300 font-medium leading-relaxed">
+                        {suggestions.length > 0 
+                          ? "Artisan-level recommendations based on your analysis."
+                          : "Explore our lookbook or upload a selfie for personalized recommendations."}
+                      </p>
+                    </div>
+
+                    {suggestions.length > 0 ? (
+                      <div className="grid gap-6 md:grid-cols-2">
+                        {suggestions.map((style, i) => (
+                          <motion.article
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: i * 0.1 }}
+                            key={style.name}
+                            className="bg-white/5 border border-white/10 rounded-2xl p-6 hover:bg-white/10 transition-colors"
+                          >
+                            <h3 className="text-xl font-bold text-gradient mb-3">{style.name}</h3>
+                            <p className="text-sm text-slate-300 font-medium leading-relaxed">{style.reason}</p>
+                          </motion.article>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 bg-white/5 rounded-2xl border border-white/10">
+                        <p className="text-slate-400 mb-6 font-medium">No personalized suggestions yet.</p>
+                        <button onClick={() => setActiveModal('selfie')} className="btn-primary mx-auto">
+                          Analyze My Look
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       
-      {/* Super minimal footer */}
-      <footer className="border-t border-white/5 py-12 px-6 text-center text-slate-500 text-sm">
-        <p>© 2026 HairMatch by Antigravity. Premium Style AI.</p>
+      {/* Minimal Footer */}
+      <footer className="fixed bottom-0 left-0 right-0 py-6 px-6 text-center z-30 pointer-events-none">
+        <p className="text-white/60 font-medium tracking-wide text-xs drop-shadow-md">
+          © 2026 HairMatch by Antigravity. Interactive Aesthetic AI.
+        </p>
       </footer>
     </div>
   );
 }
-

@@ -8,18 +8,18 @@ type GeminiFaceResponse = {
 
 const DEFAULT_SUGGESTIONS: HairstyleSuggestion[] = [
   {
-    name: "Textured Bob",
-    reason: "Adds movement and volume while softly framing most face shapes.",
+    name: "Classic Textured Bob",
+    reason: "A timeless choice that adds volume and soft framing, perfect if the AI is still analyzing your unique features.",
   },
   {
-    name: "Curtain Layers",
+    name: "Curtain Fringe Layers",
     reason:
-      "Long, face-framing layers that balance wide cheeks and soften sharp jawlines.",
+      "Great for balancing facial proportions and providing a modern, effortless look.",
   },
   {
-    name: "Modern Shag",
+    name: "Modern Wispy Shag",
     reason:
-      "Works well for wavy or straight hair, adding lift at the crown and definition around the eyes.",
+      "A versatile cut that works across many hair textures to add movement and edge.",
   },
 ];
 
@@ -30,11 +30,11 @@ const DEFAULT_FACE_PROFILE: FaceProfile = {
 };
 
 function getClient() {
-  const apiKey = "AIzaSyCqsaGaq-sR07vxa5UGQdc3CUNXnCfF1fQ";
+  const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
     console.warn(
-      "GEMINI_API_KEY is not set. Falling back to mock hairstyle suggestions."
+      "GEMINI_API_KEY is not set. Using fallback logic."
     );
     return null;
   }
@@ -56,37 +56,46 @@ export async function analyzeSelfieWithGemini(
   }
 
   const model = client.getGenerativeModel({
-    model: "gemini-pro-vision",
+    model: "gemini-1.5-flash",
+    generationConfig: {
+      responseMimeType: "application/json",
+    },
   });
 
   const prompt = `
-You are a world-class hairstylist and face-shape analyst.
+You are a world-class hairstylist and expert in facial aesthetics.
+Your goal is to provide a precise facial analysis and recommendation for 3 hairstyles that would look stunning on this individual.
 
-Look closely at this selfie and:
-1) Infer the person's face shape, hair texture, and skin tone category.
-2) Recommend 3 specific hairstyles that would be very flattering.
+AVAILABLE STYLE CATEGORIES:
+- "Textured Bob" (Modern, chic, chin-length)
+- "Layered Long" (Voluminous, face-framing)
+- "Curtain Fringe" (Soft bangs, balanced look)
+- "Modern Shag" (Edgy, textured, messy-cool)
+- "Pixie Cut" (Bold, high-fashion, short)
+- "Sleek Lob" (Professional, shoulder-length)
 
-Respond with STRICT JSON that matches this TypeScript type:
+TASK:
+1) Analyze the face shape (round, oval, square, heart, diamond, or oblong).
+2) Analyze the hair texture (straight, wavy, curly, coily, fine, thick).
+3) Analyze the skin tone category.
+4) Recommend 3 specific hairstyles. For each, use one of the names from the "AVAILABLE STYLE CATEGORIES" above if they fit well, or provide a unique name if none fit.
+5) Provide a compelling, professional reason for each recommendation (1-2 sentences).
+
+Respond with STRICT JSON matching this TypeScript type:
 
 type Response = {
   faceProfile: {
-    faceShape:
-      | "round"
-      | "oval"
-      | "square"
-      | "heart"
-      | "diamond"
-      | "oblong";
-    hairTexture: string; // e.g. "straight", "wavy", "coily"
-    skinTone: string; // e.g. "cool fair", "warm medium", "deep neutral"
+    faceShape: "round" | "oval" | "square" | "heart" | "diamond" | "oblong";
+    hairTexture: string;
+    skinTone: string;
   };
   suggestions: {
-    name: string;   // concise hairstyle name
-    reason: string; // 1–2 sentence explanation tailored to this face
+    name: string;
+    reason: string;
   }[];
 };
 
-Return ONLY valid JSON. Do not include markdown, backticks, or any extra text.
+Return ONLY valid JSON.
 `.trim();
 
   const imagePart = {
@@ -104,12 +113,23 @@ Return ONLY valid JSON. Do not include markdown, backticks, or any extra text.
       imagePart,
     ]);
 
-    const text = result.response.text();
+    let cleanText = result.response.text().trim();
+    console.log("RAW GEMINI RESPONSE:", cleanText);
+
+    // Robust JSON extraction: find the first { and last }
+    const firstBrace = cleanText.indexOf("{");
+    const lastBrace = cleanText.lastIndexOf("}");
+    
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+    }
 
     try {
-      parsed = JSON.parse(text) as GeminiFaceResponse;
+      parsed = JSON.parse(cleanText) as GeminiFaceResponse;
+      console.log("PARSED GEMINI RESPONSE:", JSON.stringify(parsed, null, 2));
     } catch (error) {
-      console.error("Failed to parse Gemini JSON response:", error, text);
+      console.error("Failed to parse Gemini JSON response:", error);
+      console.error("Attempted text:", cleanText);
     }
   } catch (error) {
     // If the model ID is unavailable for this key / API version (404) or any

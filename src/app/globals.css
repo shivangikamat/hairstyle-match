@@ -1,8 +1,100 @@
 @import "tailwindcss";
 
+@theme {
+  --color-primary-purple: #b286c2;
+  --color-accent-teal: #14b8a6;
+  --color-accent-gold: #fbbf24;
+}
+
+:root {
+  --background: #0f0518;
+  --foreground: #f8fafc;
+}
 
 html,
 body {
-  min-height: 100%;
+  min-height: 100vh;
+  background-color: transparent;
+  color: var(--foreground);
+  overflow-x: hidden;
 }
 
+
+@layer components {
+  /* Dark Glassmorphism */
+  .glass-panel {
+    @apply bg-black/40 backdrop-blur-xl border border-white/10 shadow-2xl;
+  }
+
+  .glass-nav {
+    @apply sticky top-0 z-50 w-full border-b border-white/10;
+    background: rgba(10, 5, 20, 0.4);
+    backdrop-filter: blur(24px);
+  }
+
+  /* Tactile Buttons */
+  .btn-primary {
+    @apply px-8 py-3.5 rounded-2xl font-bold tracking-wide transition-all duration-300 relative overflow-hidden flex items-center justify-center gap-2;
+    background: linear-gradient(135deg, rgba(178, 134, 194, 0.8), rgba(122, 77, 138, 0.8));
+    color: white;
+    box-shadow: 0 4px 20px rgba(178, 134, 194, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .btn-primary:hover {
+    @apply -translate-y-1;
+    background: linear-gradient(135deg, rgba(198, 154, 214, 0.9), rgba(142, 97, 158, 0.9));
+    box-shadow: 0 8px 30px rgba(178, 134, 194, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.4);
+  }
+
+  .btn-primary:active {
+    @apply translate-y-0 scale-95;
+    box-shadow: 0 2px 10px rgba(178, 134, 194, 0.2);
+  }
+  
+  .btn-primary:disabled {
+    @apply opacity-50 cursor-not-allowed transform-none shadow-none;
+  }
+
+  .btn-secondary {
+    @apply px-8 py-3.5 rounded-2xl font-bold tracking-wide transition-all duration-300 flex items-center justify-center gap-2;
+    background: rgba(255, 255, 255, 0.05);
+    color: #f8fafc;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+  }
+
+  .btn-secondary:hover {
+    @apply -translate-y-1 bg-white/10 border-white/20;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+  }
+  
+  .btn-secondary:active {
+    @apply translate-y-0 scale-95;
+  }
+
+  /* Inputs and Focus Rings */
+  .input-glass {
+    @apply w-full bg-black/20 border border-white/10 rounded-2xl px-5 py-3.5 text-slate-200 placeholder-slate-400 font-medium transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-teal-400/50 focus:border-teal-400/30 focus:bg-black/40;
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(to right, #b286c2, #14b8a6);
+  }
+}
+
+/* Custom Scrollbar for Modals */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
