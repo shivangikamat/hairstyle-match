@@ -1,13 +1,3 @@
 {
-  "/_not-found/page": "app/_not-found/page.js",
-  "/api/salons/route": "app/api/salons/route.js",
-  "/api/scrape-salons/route": "app/api/scrape-salons/route.js",
-  "/icon.svg/route": "app/icon.svg/route.js",
-  "/api/render-look/route": "app/api/render-look/route.js",
-  "/api/health/route": "app/api/health/route.js",
-  "/api/analyze-selfie/route": "app/api/analyze-selfie/route.js",
-  "/api/style-board/route": "app/api/style-board/route.js",
-  "/page": "app/page.js",
-  "/api/style-agent/route": "app/api/style-agent/route.js",
-  "/api/voice/stylist/route": "app/api/voice/stylist/route.js"
+  "/page": "app/page.js"
 }

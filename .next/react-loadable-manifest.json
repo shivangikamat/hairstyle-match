@@ -1,8 +1,8 @@
 {
   "components/PremiumSalonStudio.tsx -> @mediapipe/tasks-vision": {
-    "id": 3386,
+    "id": "components/PremiumSalonStudio.tsx -> @mediapipe/tasks-vision",
     "files": [
-      "static/chunks/386.1ffd7b373bb927f3.js"
+      "static/chunks/_app-pages-browser_node_modules_mediapipe_tasks-vision_vision_bundle_mjs.js"
     ]
   }
 }

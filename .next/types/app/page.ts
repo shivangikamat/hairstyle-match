@@ -1,4 +1,4 @@
-// File: /Users/hema/Library/Mobile Documents/com~apple~CloudDocs/Desktop/gemini march/src/app/page.tsx
+// File: /Users/shika/Documents/Project/gemini-hackathon/src/app/page.tsx
 import * as entry from '../../../src/app/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

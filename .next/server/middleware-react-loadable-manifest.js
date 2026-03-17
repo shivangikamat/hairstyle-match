@@ -1,1 +1,1 @@
-self.__REACT_LOADABLE_MANIFEST='{"components/PremiumSalonStudio.tsx -> @mediapipe/tasks-vision":{"id":3386,"files":["static/chunks/386.1ffd7b373bb927f3.js"]}}';
+self.__REACT_LOADABLE_MANIFEST="{\"components/PremiumSalonStudio.tsx -> @mediapipe/tasks-vision\":{\"id\":\"components/PremiumSalonStudio.tsx -> @mediapipe/tasks-vision\",\"files\":[\"static/chunks/_app-pages-browser_node_modules_mediapipe_tasks-vision_vision_bundle_mjs.js\"]}}"
